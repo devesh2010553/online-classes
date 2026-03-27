@@ -1,17 +1,82 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Live Class</title>
-  <link rel="stylesheet" href="css/style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EduStream — Live Classes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
 </head>
-<body>
-  <div class="card">
-    <h2>Join Class</h2>
-    <input id="name" placeholder="Your Name" type="text">
-    <input id="roomId" placeholder="Class Code" type="text">
-    <button id="joinBtn">Join</button>
+<body class="join-page">
+
+  <!-- Background grid -->
+  <div class="bg-grid"></div>
+  <div class="bg-orb orb1"></div>
+  <div class="bg-orb orb2"></div>
+
+  <div class="join-wrapper">
+    <!-- Logo/Brand -->
+    <div class="brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="36" height="36" rx="10" fill="var(--accent)"/>
+          <path d="M10 24V14l8 5 8-5v10" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="18" cy="13" r="3" fill="white"/>
+        </svg>
+      </div>
+      <span class="brand-name">EduStream</span>
+    </div>
+
+    <div class="join-card">
+      <div class="join-card-inner">
+        <h1 class="join-title">Join your <em>class</em></h1>
+        <p class="join-sub">Enter your details to connect with your classroom</p>
+
+        <div class="field-group">
+          <label for="name">Your Name</label>
+          <div class="input-wrap">
+            <svg class="input-icon" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3.5" stroke="currentColor" stroke-width="1.5"/><path d="M3 17c0-3.314 3.134-6 7-6s7 2.686 7 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <input id="name" type="text" placeholder="e.g. Aarav Sharma" autocomplete="name" spellcheck="false" />
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label for="roomId">Class Code</label>
+          <div class="input-wrap">
+            <svg class="input-icon" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 8V6a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <input id="roomId" type="text" placeholder="e.g. MATH-2025" autocomplete="off" spellcheck="false" style="text-transform:uppercase;" />
+          </div>
+        </div>
+
+        <button id="joinBtn" class="join-btn">
+          <span class="btn-text">Enter Class</span>
+          <svg class="btn-arrow" viewBox="0 0 20 20" fill="none"><path d="M4 10h12M12 6l4 4-4 4" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="btn-loader hidden">
+            <span class="spinner"></span>
+          </span>
+        </button>
+
+        <p class="join-note">No account required · End-to-end encrypted</p>
+      </div>
+
+      <!-- Side decoration -->
+      <div class="join-visual">
+        <div class="visual-dots"></div>
+        <div class="visual-card vc1">
+          <span class="vc-dot green"></span>
+          <span>Live Session</span>
+        </div>
+        <div class="visual-card vc2">
+          <span class="vc-dot blue"></span>
+          <span>HD Video</span>
+        </div>
+        <div class="visual-card vc3">
+          <span class="vc-dot amber"></span>
+          <span>Instant Chat</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="js/main.js"></script>

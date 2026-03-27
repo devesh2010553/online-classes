@@ -1,59 +1,109 @@
 const express = require("express");
-const app = express();
 const http = require("http");
-const server = http.createServer(app);
 const { Server } = require("socket.io");
-const io = new Server(server);
+const path = require("path");
 
-app.use(express.static("public"));
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+});
 
-const rooms = {}; // store room users: { roomId: { socketId: name } }
+app.use(express.static(path.join(__dirname, "../public")));
+
+// Serve index.html for root
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "../public/index.html"));
+});
+
+// Serve room.html
+app.get("/room", (req, res) => {
+  res.sendFile(path.join(__dirname, "../public/room.html"));
+});
+
+// --- Room state ---
+// rooms[roomId] = Map<socketId, { id, name, joinedAt }>
+const rooms = new Map();
+
+function getRoomUsers(roomId) {
+  return rooms.has(roomId) ? Array.from(rooms.get(roomId).values()) : [];
+}
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log(`[+] Connected: ${socket.id}`);
 
+  let currentRoom = null;
+  let currentName = null;
+
+  // ---- JOIN ROOM ----
   socket.on("join-room", ({ roomId, name }) => {
-    if (!rooms[roomId]) rooms[roomId] = {};
-    rooms[roomId][socket.id] = name;
+    if (!roomId || !name) return;
 
-    // Join socket.io room
+    currentRoom = roomId;
+    currentName = name.trim().slice(0, 32);
+
     socket.join(roomId);
 
-    // Send all existing users in room to this new user
-    const users = Object.keys(rooms[roomId])
-      .filter(id => id !== socket.id)
-      .map(id => ({ id, name: rooms[roomId][id] }));
+    if (!rooms.has(roomId)) rooms.set(roomId, new Map());
+    const room = rooms.get(roomId);
 
-    socket.emit("all-users", users);
+    // Send existing users list to the joiner
+    const existingUsers = Array.from(room.values());
+    socket.emit("all-users", existingUsers);
 
-    // Notify others that a new user joined
-    socket.to(roomId).emit("user-joined", { id: socket.id, name });
+    // Add self to room map
+    room.set(socket.id, { id: socket.id, name: currentName, joinedAt: Date.now() });
 
-    console.log(`User ${name} joined room ${roomId}`);
+    // Notify others
+    socket.to(roomId).emit("user-joined", { id: socket.id, name: currentName });
+
+    // Broadcast updated participant count
+    io.to(roomId).emit("participant-count", room.size);
+
+    console.log(`[Room ${roomId}] ${currentName} joined (${room.size} users)`);
   });
 
+  // ---- WebRTC SIGNAL ----
   socket.on("signal", ({ to, data }) => {
-    io.to(to).emit("signal", { from: socket.id, data });
+    if (!to || !data) return;
+    socket.to(to).emit("signal", { from: socket.id, data });
   });
 
+  // ---- CHAT MESSAGE ----
   socket.on("chat-message", ({ roomId, sender, message }) => {
-    // Broadcast to room except sender
-    socket.to(roomId).emit("chat-message", { sender, message });
+    if (!roomId || !message) return;
+    const safeMsg = String(message).slice(0, 500);
+    const payload = { sender: String(sender).slice(0, 32), message: safeMsg, ts: Date.now() };
+    socket.to(roomId).emit("chat-message", payload);
   });
 
+  // ---- MEDIA STATE CHANGE (mic/cam) ----
+  socket.on("media-state", ({ roomId, micOn, camOn }) => {
+    socket.to(roomId).emit("peer-media-state", { id: socket.id, micOn, camOn });
+  });
+
+  // ---- RAISE HAND ----
+  socket.on("raise-hand", ({ roomId }) => {
+    socket.to(roomId).emit("peer-raised-hand", { id: socket.id, name: currentName });
+  });
+
+  // ---- DISCONNECT ----
   socket.on("disconnect", () => {
-    // Remove user from all rooms
-    for (const roomId in rooms) {
-      if (rooms[roomId][socket.id]) {
-        const name = rooms[roomId][socket.id];
-        delete rooms[roomId][socket.id];
-        // Notify others
-        socket.to(roomId).emit("user-left", socket.id);
-        console.log(`User ${name} disconnected from room ${roomId}`);
+    console.log(`[-] Disconnected: ${socket.id} (${currentName})`);
+    if (currentRoom && rooms.has(currentRoom)) {
+      const room = rooms.get(currentRoom);
+      room.delete(socket.id);
+      if (room.size === 0) {
+        rooms.delete(currentRoom);
+      } else {
+        io.to(currentRoom).emit("user-left", socket.id);
+        io.to(currentRoom).emit("participant-count", room.size);
       }
     }
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Live Class running at http://localhost:${PORT}`));
