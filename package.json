@@ -1,0 +1,13 @@
+{
+  "name": "live-class-server",
+  "version": "1.0.0",
+  "description": "Live classroom app using WebRTC and Socket.IO",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  }
+}

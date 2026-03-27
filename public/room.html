@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Class Room</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header>
+    <h2>Live Class</h2>
+    <div class="controls">
+      <button id="micBtn">🎤 Mute </button>
+      <button id="camBtn">📷 Off</button>
+      <button id="shareScreenBtn">🖥️Share Screen</button>
+      <button id="toggleChatBtn">💬Chat</button>
+      <button id="leaveBtn">📞Leave</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="videoGrid"></div>
+
+    <div id="chatPanel" class="hidden">
+      <div id="chatMessages"></div>
+      <input id="chatInput" placeholder="Message..." />
+      <button id="sendMsgBtn">Send</button>
+    </div>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/room.js"></script>
+</body>
+</html>
