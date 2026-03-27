@@ -1,84 +1,111 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+  <meta name="theme-color" content="#2563EB"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="EduStream"/>
+  <link rel="manifest" href="/manifest.json"/>
+  <link rel="apple-touch-icon" href="/icons/icon-192.png"/>
   <title>EduStream — Live Classes</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/css/style.css"/>
 </head>
-<body class="join-page">
+<body class="page-join">
 
-  <!-- Background grid -->
-  <div class="bg-grid"></div>
-  <div class="bg-orb orb1"></div>
-  <div class="bg-orb orb2"></div>
+  <div class="bg-noise"></div>
+  <div class="orb o1"></div>
+  <div class="orb o2"></div>
+  <div class="orb o3"></div>
 
-  <div class="join-wrapper">
-    <!-- Logo/Brand -->
+  <div class="join-shell">
+
     <div class="brand">
-      <div class="brand-icon">
-        <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect width="36" height="36" rx="10" fill="var(--accent)"/>
-          <path d="M10 24V14l8 5 8-5v10" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="18" cy="13" r="3" fill="white"/>
-        </svg>
-      </div>
+      <svg class="brand-logo" viewBox="0 0 40 40" fill="none">
+        <rect width="40" height="40" rx="10" fill="#2563EB"/>
+        <polygon points="16,12 16,28 30,20" fill="white"/>
+      </svg>
       <span class="brand-name">EduStream</span>
+      <span class="brand-hd">4K</span>
     </div>
 
     <div class="join-card">
-      <div class="join-card-inner">
-        <h1 class="join-title">Join your <em>class</em></h1>
-        <p class="join-sub">Enter your details to connect with your classroom</p>
+      <!-- FORM SIDE -->
+      <div class="join-form">
+        <p class="join-eyebrow">Live Classroom Platform</p>
+        <h1 class="join-h1">Join your <em>class</em></h1>
+        <p class="join-sub">HD 1080p / 4K · Phone &amp; PC · No account needed</p>
 
-        <div class="field-group">
-          <label for="name">Your Name</label>
-          <div class="input-wrap">
-            <svg class="input-icon" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3.5" stroke="currentColor" stroke-width="1.5"/><path d="M3 17c0-3.314 3.134-6 7-6s7 2.686 7 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-            <input id="name" type="text" placeholder="e.g. Aarav Sharma" autocomplete="name" spellcheck="false" />
+        <div class="field-stack">
+          <div class="field">
+            <label for="f-name">Your name</label>
+            <div class="inp-wrap">
+              <svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3.5" stroke="currentColor" stroke-width="1.5"/><path d="M2 18c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <input id="f-name" type="text" placeholder="e.g. Aarav Sharma" autocomplete="name" enterkeyhint="next" spellcheck="false"/>
+            </div>
           </div>
+
+          <div class="field">
+            <label for="f-room">Class code</label>
+            <div class="inp-wrap">
+              <svg viewBox="0 0 20 20" fill="none"><rect x="3" y="9" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 9V7a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <input id="f-room" type="text" placeholder="e.g. MATH101" autocomplete="off" enterkeyhint="go" spellcheck="false" inputmode="text"/>
+            </div>
+          </div>
+
+          <button id="btn-join" class="btn-join">
+            <span class="btn-txt">Enter Class</span>
+            <svg class="btn-arr" viewBox="0 0 20 20" fill="none"><path d="M4 10h12M12 6l4 4-4 4" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="btn-spin hidden"><span class="spinner"></span></span>
+          </button>
         </div>
 
-        <div class="field-group">
-          <label for="roomId">Class Code</label>
-          <div class="input-wrap">
-            <svg class="input-icon" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 8V6a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-            <input id="roomId" type="text" placeholder="e.g. MATH-2025" autocomplete="off" spellcheck="false" style="text-transform:uppercase;" />
-          </div>
+        <div class="trust-row">
+          <span>🔒 Encrypted</span>
+          <span>⚡ Instant join</span>
+          <span>📱 Any device</span>
         </div>
-
-        <button id="joinBtn" class="join-btn">
-          <span class="btn-text">Enter Class</span>
-          <svg class="btn-arrow" viewBox="0 0 20 20" fill="none"><path d="M4 10h12M12 6l4 4-4 4" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span class="btn-loader hidden">
-            <span class="spinner"></span>
-          </span>
-        </button>
-
-        <p class="join-note">No account required · End-to-end encrypted</p>
       </div>
 
-      <!-- Side decoration -->
-      <div class="join-visual">
-        <div class="visual-dots"></div>
-        <div class="visual-card vc1">
-          <span class="vc-dot green"></span>
-          <span>Live Session</span>
+      <!-- PREVIEW SIDE (hidden on small phones) -->
+      <div class="join-preview">
+        <div class="preview-window">
+          <div class="pw-bar">
+            <span class="pw-dot" style="background:#EF4444"></span>
+            <span class="pw-dot" style="background:#F59E0B"></span>
+            <span class="pw-dot" style="background:#22C55E"></span>
+            <span class="pw-title">MATH101</span>
+            <span class="pw-live"><span class="live-dot"></span>LIVE</span>
+          </div>
+          <!-- spotlight (screen sharing) + sidebar grid -->
+          <div class="pw-stage">
+            <div class="pw-spotlight">
+              <div class="pw-av big">AS</div>
+              <div class="pw-label">Dr. Ananya <span class="pw-host">HOST</span></div>
+              <div class="pw-sharing">📡 Sharing Screen</div>
+              <div class="pw-ring"></div>
+            </div>
+            <div class="pw-sidebar">
+              <div class="pw-tile"><div class="pw-av">RK</div><span>Rohan K.</span></div>
+              <div class="pw-tile speaking"><div class="pw-av">PM</div><span>Priya M.</span><div class="pw-ring"></div></div>
+              <div class="pw-tile"><div class="pw-av">VT</div><span>Vikram</span></div>
+            </div>
+          </div>
+          <div class="pw-chat">💬 <b>Rohan:</b> Can you zoom in on slide 4?</div>
         </div>
-        <div class="visual-card vc2">
-          <span class="vc-dot blue"></span>
-          <span>HD Video</span>
-        </div>
-        <div class="visual-card vc3">
-          <span class="vc-dot amber"></span>
-          <span>Instant Chat</span>
+        <div class="preview-stats">
+          <div class="ps"><b>4K</b><span>Quality</span></div>
+          <div class="ps"><b>&lt;60ms</b><span>Latency</span></div>
+          <div class="ps"><b>PWA</b><span>Installable</span></div>
         </div>
       </div>
     </div>
+
   </div>
 
-  <script src="js/main.js"></script>
+  <script src="/js/main.js"></script>
 </body>
 </html>
