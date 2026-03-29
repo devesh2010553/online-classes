@@ -1,60 +1,94 @@
 const express = require("express");
-const http    = require("http");
+const http = require("http");
 const { Server } = require("socket.io");
-const path    = require("path");
+const path = require("path");
 
-const app    = express();
+const app = express();
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: "*" }, pingTimeout: 60000 });
+const io = new Server(server, {
+  cors: { origin: "*" },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+});
 
-const PUBLIC = path.join(__dirname, "../public");
-app.use(express.static(PUBLIC));
-app.get("/",     (_, r) => r.sendFile(path.join(PUBLIC, "index.html")));
-app.get("/room", (_, r) => r.sendFile(path.join(PUBLIC, "room.html")));
+// Serve all static files from /public
+app.use(express.static(path.join(__dirname, "../public")));
 
-// rooms: Map<roomId, Map<socketId, {id,name,micOn,camOn}>>
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "../public/index.html"));
+});
+
+app.get("/room", (req, res) => {
+  res.sendFile(path.join(__dirname, "../public/room.html"));
+});
+
+// rooms[roomId] = Map<socketId, { id, name, joinedAt }>
 const rooms = new Map();
 
-function getRoom(id) {
-  if (!rooms.has(id)) rooms.set(id, new Map());
-  return rooms.get(id);
-}
-
-io.on("connection", socket => {
-  let myRoom = null, myName = null;
+io.on("connection", (socket) => {
+  console.log("[+] Connected:", socket.id);
+  let currentRoom = null;
+  let currentName = null;
 
   socket.on("join-room", ({ roomId, name }) => {
     if (!roomId || !name) return;
-    myRoom = String(roomId).toUpperCase().trim().slice(0, 32);
-    myName = String(name).trim().slice(0, 32);
-    socket.join(myRoom);
-    const rm = getRoom(myRoom);
-    socket.emit("all-users", Array.from(rm.values()));
-    rm.set(socket.id, { id: socket.id, name: myName, micOn: true, camOn: true });
-    socket.to(myRoom).emit("user-joined", { id: socket.id, name: myName });
-    io.to(myRoom).emit("room-count", rm.size);
-    console.log(`[${myRoom}] +${myName} (${rm.size})`);
+    currentRoom = roomId;
+    currentName = name.trim().slice(0, 32);
+    socket.join(roomId);
+    if (!rooms.has(roomId)) rooms.set(roomId, new Map());
+    const room = rooms.get(roomId);
+    const existingUsers = Array.from(room.values());
+    socket.emit("all-users", existingUsers);
+    room.set(socket.id, { id: socket.id, name: currentName, joinedAt: Date.now() });
+    socket.to(roomId).emit("user-joined", { id: socket.id, name: currentName });
+    io.to(roomId).emit("participant-count", room.size);
+    console.log(`[Room ${roomId}] ${currentName} joined (${room.size} users)`);
   });
 
-  socket.on("signal",            ({ to, data })        => to && data && socket.to(to).emit("signal", { from: socket.id, data }));
-  socket.on("chat-msg",          ({ roomId, message }) => socket.to(roomId).emit("chat-msg",  { name: myName, message: String(message).slice(0,1000), ts: Date.now() }));
-  socket.on("media-state",       ({ roomId, mic, cam })=> { const rm=rooms.get(roomId); if(rm?.has(socket.id)){const u=rm.get(socket.id);u.micOn=mic;u.camOn=cam;} socket.to(roomId).emit("peer-state",{id:socket.id,mic,cam}); });
-  socket.on("speaking",          ({ roomId, on })      => socket.to(roomId).emit("peer-speaking",   { id: socket.id, on }));
-  socket.on("screen-on",         ({ roomId })          => socket.to(roomId).emit("peer-screen-on",  { id: socket.id, name: myName }));
-  socket.on("screen-off",        ({ roomId })          => socket.to(roomId).emit("peer-screen-off", { id: socket.id }));
-  socket.on("raise-hand",        ({ roomId })          => socket.to(roomId).emit("peer-hand",       { id: socket.id, name: myName }));
-  socket.on("pin",               ({ roomId, peerId })  => io.to(roomId).emit("do-pin",              { peerId }));
-  socket.on("unpin",             ({ roomId })          => io.to(roomId).emit("do-unpin",             {}));
+  socket.on("signal", ({ to, data }) => {
+    if (!to || !data) return;
+    socket.to(to).emit("signal", { from: socket.id, data });
+  });
+
+  socket.on("chat-message", ({ roomId, sender, message, ts }) => {
+    if (!roomId || !message) return;
+    socket.to(roomId).emit("chat-message", {
+      sender: String(sender).slice(0, 32),
+      message: String(message).slice(0, 500),
+      ts: ts || Date.now(),
+    });
+  });
+
+  socket.on("media-state", ({ roomId, micOn, camOn }) => {
+    socket.to(roomId).emit("peer-media-state", { id: socket.id, micOn, camOn });
+  });
+
+  socket.on("raise-hand", ({ roomId }) => {
+    socket.to(roomId).emit("peer-raised-hand", { id: socket.id, name: currentName });
+  });
+
+  socket.on("speaking", ({ roomId, isSpeaking }) => {
+    socket.to(roomId).emit("peer-speaking", { id: socket.id, isSpeaking });
+  });
+
+  socket.on("screen-share-state", ({ roomId, isSharing }) => {
+    socket.to(roomId).emit("peer-screen-share", { id: socket.id, name: currentName, isSharing });
+  });
 
   socket.on("disconnect", () => {
-    if (!myRoom || !rooms.has(myRoom)) return;
-    const rm = rooms.get(myRoom);
-    rm.delete(socket.id);
-    if (rm.size === 0) rooms.delete(myRoom);
-    else { io.to(myRoom).emit("user-left", socket.id); io.to(myRoom).emit("room-count", rm.size); }
-    console.log(`[${myRoom}] -${myName}`);
+    console.log("[-] Disconnected:", socket.id, currentName);
+    if (currentRoom && rooms.has(currentRoom)) {
+      const room = rooms.get(currentRoom);
+      room.delete(socket.id);
+      if (room.size === 0) {
+        rooms.delete(currentRoom);
+      } else {
+        io.to(currentRoom).emit("user-left", socket.id);
+        io.to(currentRoom).emit("participant-count", room.size);
+      }
+    }
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀  EduStream → http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`EduStream running at http://localhost:${PORT}`));

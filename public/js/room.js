@@ -1,832 +1,920 @@
-"use strict";
-/*
-  EduStream Room Controller v4
-  ────────────────────────────────────────────────────────
-  ✅ HD 1080p / 4K video (best quality the device supports)
-  ✅ Speaker detection   → tile moves to top + bigger
-  ✅ Screen share        → tile moves to top + bigger
-  ✅ Screen share on phone (rear-camera fallback, no crash)
-  ✅ Pin any tile        → double-tap (mobile) / click 📌 (desktop)
-  ✅ Unpin              → tap 📌 again on pinned tile
-  ✅ Real-time chat with unread badge
-  ✅ Mic / Camera toggle with visual feedback
-  ✅ Raise hand
-  ✅ Participant count + session timer
-  ✅ PWA service worker registered
-  ✅ Leave confirmation modal
-  ✅ Toast notifications
-  ✅ Fully responsive: phone portrait/landscape + desktop
-*/
+// EduStream — Room Controller v3
+// Features: 4K video, pin, speaker detection, screen share w/ mobile fallback, PWA
 
-// ── PWA ────────────────────────────────────────────────────
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
-}
+(function () {
+  "use strict";
 
-// ── URL params ─────────────────────────────────────────────
-const qp      = new URLSearchParams(location.search);
-const ROOM    = (qp.get("room") || "").toUpperCase().trim();
-const ME      = (qp.get("name") || "Guest").trim().slice(0, 32);
+  // ── URL params ──────────────────────────────────────────────────────────────
+  var params   = new URLSearchParams(window.location.search);
+  var roomId   = params.get("room");
+  var userName = (params.get("name") || "Anonymous").trim().slice(0, 32);
 
-if (!ROOM) { alert("No class code!"); location.href = "/"; throw 0; }
+  if (!roomId) {
+    alert("No class code found. Redirecting…");
+    window.location.href = "/";
+    return;
+  }
 
-// ── Socket ─────────────────────────────────────────────────
-const socket = io({ transports: ["websocket", "polling"] });
+  // ── DOM refs ────────────────────────────────────────────────────────────────
+  var videoGrid         = document.getElementById("videoGrid");
+  var thumbStrip        = document.getElementById("thumbStrip");
+  var chatPanel         = document.getElementById("chatPanel");
+  var chatMessages      = document.getElementById("chatMessages");
+  var chatInput         = document.getElementById("chatInput");
+  var sendMsgBtn        = document.getElementById("sendMsgBtn");
+  var micBtn            = document.getElementById("micBtn");
+  var camBtn            = document.getElementById("camBtn");
+  var shareScreenBtn    = document.getElementById("shareScreenBtn");
+  var raiseHandBtn      = document.getElementById("raiseHandBtn");
+  var toggleChatBtn     = document.getElementById("toggleChatBtn");
+  var closeChatBtn      = document.getElementById("closeChatBtn");
+  var leaveBtn          = document.getElementById("leaveBtn");
+  var leaveModal        = document.getElementById("leaveModal");
+  var cancelLeave       = document.getElementById("cancelLeave");
+  var confirmLeave      = document.getElementById("confirmLeave");
+  var sessionTimerEl    = document.getElementById("sessionTimer");
+  var participantCount  = document.getElementById("participantCount");
+  var roomCodeEl        = document.getElementById("roomCode");
+  var chatUnread        = document.getElementById("chatUnread");
+  var toastContainer    = document.getElementById("toastContainer");
+  var screenShareFallback = document.getElementById("screenShareFallback");
+  var ssfClose          = document.getElementById("ssfClose");
 
-// ── DOM ────────────────────────────────────────────────────
-const grid        = document.getElementById("grid");
-const chatPanel   = document.getElementById("chatPanel");
-const chatLog     = document.getElementById("chatLog");
-const chatInput   = document.getElementById("chatInput");
-const btnSend     = document.getElementById("btnSend");
-const btnMic      = document.getElementById("btnMic");
-const btnCam      = document.getElementById("btnCam");
-const btnShare    = document.getElementById("btnShare");
-const btnHand     = document.getElementById("btnHand");
-const btnChat     = document.getElementById("btnChat");
-const btnLeave    = document.getElementById("btnLeave");
-const btnCloseChat= document.getElementById("btnCloseChat");
-const pCount      = document.getElementById("pCount");
-const hTimer      = document.getElementById("hTimer");
-const hRoomCode   = document.getElementById("hRoomCode");
-const unread      = document.getElementById("unread");
-const qualBadge   = document.getElementById("qualBadge");
-const leaveModal  = document.getElementById("leaveModal");
-const btnStay     = document.getElementById("btnStay");
-const btnGo       = document.getElementById("btnGo");
-const toastsEl    = document.getElementById("toasts");
+  // ── State ───────────────────────────────────────────────────────────────────
+  var localStream   = null;
+  var screenStream  = null;
+  var isMicOn       = true;
+  var isCamOn       = true;
+  var isHandRaised  = false;
+  var isChatOpen    = false;
+  var unreadCount   = 0;
+  var sessionStart  = Date.now();
+  var pinnedId      = null;
+  var activeSpeaker = null;
+  var speakerTimer  = null;
+  var peers         = {};   // peerId → RTCPeerConnection
+  var peerNames     = {};   // peerId → name
+  var audioAnalysers = {};  // id → { ctx, interval }
 
-// ── State ──────────────────────────────────────────────────
-let localStream   = null;   // camera+mic
-let screenStream  = null;   // screen / rear cam on mobile
-let micOn         = true;
-let camOn         = true;
-let sharing       = false;
-let handUp        = false;
-let chatOpen      = false;
-let unreadCount   = 0;
-let pinnedId      = null;   // socket.id of pinned peer, or null
-let speakerId     = null;   // currently loudest speaker
-let sessionStart  = Date.now();
-const peers       = {};     // peerId → RTCPeerConnection
-const peerNames   = {};     // peerId → name string
-const isMobile    = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  // ── Socket ──────────────────────────────────────────────────────────────────
+  var socket = io({ transports: ["websocket", "polling"] });
 
-// ── ICE servers ────────────────────────────────────────────
-const ICE = { iceServers: [
-  { urls: "stun:stun.l.google.com:19302"  },
-  { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun2.l.google.com:19302" },
-]};
+  // ── Room code display ───────────────────────────────────────────────────────
+  roomCodeEl.textContent = roomId;
 
-// ─────────────────────────────────────────────────────────
-// INIT
-// ─────────────────────────────────────────────────────────
-hRoomCode.textContent = ROOM;
-setInterval(updateTimer, 1000);
+  // ── Session timer ───────────────────────────────────────────────────────────
+  setInterval(function () {
+    var ms    = Date.now() - sessionStart;
+    var total = Math.floor(ms / 1000);
+    var h = Math.floor(total / 3600);
+    var m = Math.floor((total % 3600) / 60);
+    var s = total % 60;
+    var p = function (n) { return String(n).padStart(2, "0"); };
+    sessionTimerEl.textContent = h > 0
+      ? p(h) + ":" + p(m) + ":" + p(s)
+      : p(m) + ":" + p(s);
+  }, 1000);
 
-async function init() {
-  await openCamera();
-  socket.emit("join-room", { roomId: ROOM, name: ME });
-  sysMsg(`Joined as "${ME}" · Room ${ROOM}`);
-}
+  // ──────────────────────────────────────────────────────────────────────────
+  // UTILITIES
+  // ──────────────────────────────────────────────────────────────────────────
+  function toast(msg, type, duration) {
+    type     = type || "info";
+    duration = duration || 3500;
+    var el   = document.createElement("div");
+    el.className = "toast " + type;
+    var icon = type === "error" ? "❌" : type === "success" ? "✅" : "ℹ️";
+    el.innerHTML = "<span>" + icon + "</span> " + msg;
+    toastContainer.appendChild(el);
+    setTimeout(function () {
+      el.style.opacity = "0";
+      el.style.transform = "translateY(12px)";
+      el.style.transition = "opacity 0.3s, transform 0.3s";
+      setTimeout(function () { el.remove(); }, 350);
+    }, duration);
+  }
 
-// ─────────────────────────────────────────────────────────
-// TIMER
-// ─────────────────────────────────────────────────────────
-function updateTimer() {
-  const s = Math.floor((Date.now() - sessionStart) / 1000);
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sc = s % 60;
-  const p = n => String(n).padStart(2, "0");
-  hTimer.textContent = h ? `${p(h)}:${p(m)}:${p(sc)}` : `${p(m)}:${p(sc)}`;
-}
+  function getInitials(name) {
+    return (name || "?").split(" ").slice(0, 2)
+      .map(function (w) { return w[0] || ""; })
+      .join("").toUpperCase() || "?";
+  }
 
-// ─────────────────────────────────────────────────────────
-// CAMERA / MIC
-// ─────────────────────────────────────────────────────────
-async function openCamera() {
-  // Try ideal 4K → fallback to lower
-  const attempts = [
-    { video: { width:{ideal:3840}, height:{ideal:2160}, frameRate:{ideal:30}, facingMode:"user" }, audio: audioConstraints() },
-    { video: { width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30}, facingMode:"user" }, audio: audioConstraints() },
-    { video: { facingMode: "user" }, audio: audioConstraints() },
-    { video: true, audio: audioConstraints() },
-    { video: false, audio: audioConstraints() },
+  function isMobileDevice() {
+    return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent)
+      || (navigator.maxTouchPoints > 2 && /MacIntel/.test(navigator.platform));
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // MEDIA — try 4K → 1080p → 720p → SD → audio-only
+  // ──────────────────────────────────────────────────────────────────────────
+  var VIDEO_ATTEMPTS = [
+    { label: "4K",     v: { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } } },
+    { label: "1080p",  v: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } } },
+    { label: "720p",   v: { width: { ideal: 1280 }, height: { ideal: 720  }, frameRate: { ideal: 30 } } },
+    { label: "480p",   v: { width: { ideal: 640  }, height: { ideal: 480  } } },
+    { label: "audio",  v: false },
   ];
-  for (const c of attempts) {
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia(c);
-      showQuality(localStream);
-      addTile(localStream, socket.id, true, ME);
-      startSpeakDetect(localStream);
+
+  var AUDIO_CONSTRAINTS = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+
+  function getMedia() {
+    tryNextQuality(0);
+  }
+
+  function tryNextQuality(idx) {
+    if (idx >= VIDEO_ATTEMPTS.length) {
+      // Complete failure — join without any media
+      toast("No camera/mic — joining as viewer", "error");
+      localStream = new MediaStream();
+      addVideoTile(localStream, socket.id, true, userName, false, false);
+      socket.emit("join-room", { roomId: roomId, name: userName });
       return;
-    } catch (_) {}
+    }
+
+    var attempt = VIDEO_ATTEMPTS[idx];
+    var constraints = {
+      audio: AUDIO_CONSTRAINTS,
+      video: attempt.v,
+    };
+
+    navigator.mediaDevices.getUserMedia(constraints)
+      .then(function (stream) {
+        localStream = stream;
+        var hasVideo = stream.getVideoTracks().length > 0;
+        if (idx === 0) {
+          toast("Camera: " + attempt.label, "success", 2000);
+        } else if (idx < 4) {
+          toast("Camera: " + attempt.label, "info", 2000);
+        }
+        addVideoTile(stream, socket.id, true, userName, true, hasVideo);
+        setupAudioAnalyser(stream, socket.id, true);
+        socket.emit("join-room", { roomId: roomId, name: userName });
+      })
+      .catch(function (err) {
+        console.warn("Media attempt " + attempt.label + " failed:", err.name);
+        tryNextQuality(idx + 1);
+      });
   }
-  // Complete fallback: empty stream
-  localStream = new MediaStream();
-  addTile(localStream, socket.id, true, ME, false, false);
-  toast("Camera/mic unavailable — you are listen-only", "err");
-}
 
-function audioConstraints() {
-  return { echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000 };
-}
+  // ──────────────────────────────────────────────────────────────────────────
+  // AUDIO ANALYSER — speaking detection
+  // ──────────────────────────────────────────────────────────────────────────
+  function setupAudioAnalyser(stream, id, isLocal) {
+    if (!stream.getAudioTracks().length) return;
+    try {
+      var AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      var ctx      = new AudioContext();
+      var source   = ctx.createMediaStreamSource(stream);
+      var analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+      var data = new Uint8Array(analyser.frequencyBinCount);
+      var prevSpeaking = false;
 
-function showQuality(stream) {
-  const vt = stream.getVideoTracks()[0];
-  if (!vt) return;
-  const s = vt.getSettings();
-  const w = s.width || 0, h = s.height || 0;
-  let label = "HD", cls = "fhd";
-  if (w >= 3840 || h >= 2160)      { label = "4K";    cls = "uhd";   }
-  else if (w >= 1920 || h >= 1080) { label = "1080p"; cls = "fhd";   }
-  else if (w >= 1280 || h >= 720)  { label = "720p";  cls = "hd720"; }
-  else                              { label = "SD";    cls = "sd";    }
-  qualBadge.textContent = label;
-  qualBadge.className   = `qual-badge ${cls}`;
-}
+      var interval = setInterval(function () {
+        analyser.getByteFrequencyData(data);
+        var sum = 0;
+        for (var i = 0; i < data.length; i++) sum += data[i];
+        var avg = sum / data.length;
+        var speaking = avg > 10;
 
-// ─────────────────────────────────────────────────────────
-// SPEAKING DETECTION  (AudioAnalyser on local mic)
-// ─────────────────────────────────────────────────────────
-function startSpeakDetect(stream) {
-  try {
-    const ac  = new (window.AudioContext || window.webkitAudioContext)();
-    const src = ac.createMediaStreamSource(stream);
-    const an  = ac.createAnalyser();
-    an.fftSize = 512; an.smoothingTimeConstant = 0.7;
-    src.connect(an);
-    const buf = new Uint8Array(an.frequencyBinCount);
-    let wasSpeaking = false, debounce = null;
+        // Update tile border
+        var tile = document.getElementById("tile-" + id);
+        if (tile) tile.classList.toggle("is-speaker", speaking);
 
-    (function tick() {
-      an.getByteFrequencyData(buf);
-      const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
-      const now = avg > 14;
+        // Update thumb
+        var thumb = thumbStrip.querySelector("[data-id='" + id + "']");
+        if (thumb) thumb.classList.toggle("is-speaker", speaking);
 
-      if (now && !wasSpeaking) {
-        clearTimeout(debounce);
-        wasSpeaking = true;
-        markSpeaking(socket.id, true);
-        socket.emit("speaking", { roomId: ROOM, on: true });
-      } else if (!now && wasSpeaking) {
-        debounce = setTimeout(() => {
-          wasSpeaking = false;
-          markSpeaking(socket.id, false);
-          socket.emit("speaking", { roomId: ROOM, on: false });
-        }, 700);
+        if (speaking !== prevSpeaking) {
+          prevSpeaking = speaking;
+          if (isLocal) {
+            socket.emit("speaking", { roomId: roomId, isSpeaking: speaking });
+          }
+          if (speaking && !pinnedId) {
+            activeSpeaker = id;
+            updateSpeakerProminence();
+            clearTimeout(speakerTimer);
+            speakerTimer = setTimeout(function () {
+              if (!pinnedId) { activeSpeaker = null; updateSpeakerProminence(); }
+            }, 3000);
+          }
+        }
+      }, 200);
+
+      audioAnalysers[id] = { ctx: ctx, interval: interval };
+    } catch (e) {
+      console.warn("AudioAnalyser failed:", e);
+    }
+  }
+
+  function teardownAudioAnalyser(id) {
+    var a = audioAnalysers[id];
+    if (!a) return;
+    clearInterval(a.interval);
+    try { a.ctx.close(); } catch (_) {}
+    delete audioAnalysers[id];
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // GRID LAYOUT
+  // ──────────────────────────────────────────────────────────────────────────
+  function updateGridClass() {
+    var tiles = videoGrid.querySelectorAll(".video-container");
+    var count = tiles.length;
+    videoGrid.className = "video-grid";
+
+    if (pinnedId) {
+      videoGrid.classList.add("has-pinned");
+      tiles.forEach(function (t) {
+        t.style.display = (t.id === "tile-" + pinnedId) ? "" : "none";
+      });
+      return;
+    }
+
+    // Show all tiles
+    tiles.forEach(function (t) { t.style.display = ""; });
+
+    if      (count === 1)  videoGrid.classList.add("count-1");
+    else if (count === 2)  videoGrid.classList.add("count-2");
+    else if (count <= 4)   videoGrid.classList.add("count-34");
+    else                   videoGrid.classList.add("count-many");
+
+    updateSpeakerProminence();
+  }
+
+  function updateSpeakerProminence() {
+    videoGrid.querySelectorAll(".video-container").forEach(function (t) {
+      t.classList.remove("is-prominent");
+    });
+    if (activeSpeaker) {
+      var t = document.getElementById("tile-" + activeSpeaker);
+      if (t) t.classList.add("is-prominent");
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // THUMBNAIL STRIP
+  // ──────────────────────────────────────────────────────────────────────────
+  function refreshThumbStrip() {
+    thumbStrip.innerHTML = "";
+    if (!pinnedId) {
+      thumbStrip.style.display = "none";
+      return;
+    }
+    thumbStrip.style.display = "flex";
+
+    var tiles = Array.from(videoGrid.querySelectorAll(".video-container"));
+    tiles.forEach(function (tile) {
+      var id   = tile.id.replace("tile-", "");
+      var name = tile.dataset.name || id.slice(0, 8);
+      var srcObj = tile._video ? tile._video.srcObject : null;
+
+      var thumb = document.createElement("div");
+      thumb.className = "thumb-tile";
+      thumb.dataset.id = id;
+      if (id === pinnedId)      thumb.classList.add("active-thumb");
+      if (id === activeSpeaker) thumb.classList.add("is-speaker");
+
+      var tv = document.createElement("video");
+      tv.autoplay   = true;
+      tv.playsInline = true;
+      tv.muted      = (id === socket.id);
+      if (srcObj) tv.srcObject = srcObj;
+      thumb.appendChild(tv);
+
+      var nameEl = document.createElement("div");
+      nameEl.className = "thumb-name";
+      nameEl.textContent = (id === socket.id) ? "You" : name;
+      thumb.appendChild(nameEl);
+
+      thumb.addEventListener("click", function () { pinTile(id); });
+      thumbStrip.appendChild(thumb);
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // PIN / UNPIN
+  // ──────────────────────────────────────────────────────────────────────────
+  function pinTile(id) {
+    var wasPinned = (pinnedId === id);
+
+    // Clear old pin
+    if (pinnedId) {
+      var prev = document.getElementById("tile-" + pinnedId);
+      if (prev) {
+        prev.classList.remove("pinned");
+        var oldTag = prev.querySelector(".pin-tag");
+        if (oldTag) oldTag.remove();
       }
-      requestAnimationFrame(tick);
-    })();
-  } catch (_) {}
-}
-
-// ─────────────────────────────────────────────────────────
-// TILES
-// ─────────────────────────────────────────────────────────
-function mkInitials(name) {
-  return (name || "?").split(" ").slice(0, 2).map(w => w[0] || "").join("").toUpperCase() || "?";
-}
-
-function addTile(stream, id, isLocal, name, mic = true, cam = true) {
-  if (document.getElementById("t" + id)) return;
-  peerNames[id] = name;
-
-  const tile = document.createElement("div");
-  tile.className = "vt";
-  tile.id = "t" + id;
-  tile.dataset.name = name;
-
-  // video
-  const vid = document.createElement("video");
-  vid.srcObject   = stream;
-  vid.autoplay    = true;
-  vid.playsInline = true;
-  vid.muted       = isLocal;
-  tile.appendChild(vid);
-
-  // cam-off placeholder
-  const co = document.createElement("div");
-  co.className = "cam-off";
-  co.style.display = cam ? "none" : "flex";
-  const av = document.createElement("div");
-  av.className = "av";
-  av.textContent = mkInitials(name);
-  const avn = document.createElement("div");
-  avn.className = "av-name";
-  avn.textContent = name;
-  co.appendChild(av); co.appendChild(avn);
-  tile.appendChild(co);
-
-  // speaking ring
-  const ring = document.createElement("div");
-  ring.className = "speak-ring";
-  tile.appendChild(ring);
-
-  // bottom bar
-  const bar = document.createElement("div");
-  bar.className = "tile-bar";
-  const nameEl = document.createElement("span");
-  nameEl.className = "tile-name";
-  nameEl.textContent = isLocal ? "You" : name;
-  if (isLocal) {
-    const tag = document.createElement("span");
-    tag.className = "you-tag"; tag.textContent = "YOU";
-    nameEl.appendChild(tag);
-  }
-  const icons = document.createElement("div");
-  icons.className = "tile-icons";
-  const mi = document.createElement("span");
-  mi.className = "ticon" + (mic ? "" : " off");
-  mi.textContent = mic ? "🎤" : "🔇";
-  const ci = document.createElement("span");
-  ci.className = "ticon" + (cam ? "" : " off");
-  ci.textContent = cam ? "📷" : "🚫";
-  icons.appendChild(mi); icons.appendChild(ci);
-  bar.appendChild(nameEl); bar.appendChild(icons);
-  tile.appendChild(bar);
-
-  // pin button
-  const pb = document.createElement("button");
-  pb.className = "pin-btn"; pb.textContent = "📌";
-  pb.title = "Pin this tile";
-  pb.addEventListener("click", e => { e.stopPropagation(); togglePin(id); });
-  tile.appendChild(pb);
-
-  // double-tap → pin (mobile)
-  let lastTap = 0;
-  tile.addEventListener("touchend", e => {
-    const now = Date.now();
-    if (now - lastTap < 320) { e.preventDefault(); togglePin(id); }
-    lastTap = now;
-  }, { passive: false });
-  // double-click → pin (desktop)
-  tile.addEventListener("dblclick", () => togglePin(id));
-
-  // internal refs
-  tile._vid = vid;
-  tile._co  = co;
-  tile._mi  = mi;
-  tile._ci  = ci;
-
-  grid.appendChild(tile);
-  relayout();
-}
-
-function removeTile(id) {
-  const el = document.getElementById("t" + id);
-  if (el) el.remove();
-  delete peerNames[id];
-  if (pinnedId === id) applyPin(null, false);
-  if (speakerId === id) { speakerId = null; grid.classList.remove("spotlight-mode"); }
-  relayout();
-}
-
-// ── Tile media state ───────────────────────────────────────
-function setTileMedia(id, mic, cam) {
-  const tile = document.getElementById("t" + id);
-  if (!tile) return;
-  tile._mi.textContent = mic ? "🎤" : "🔇";
-  tile._mi.className   = "ticon" + (mic ? "" : " off");
-  tile._ci.textContent = cam ? "📷" : "🚫";
-  tile._ci.className   = "ticon" + (cam ? "" : " off");
-  tile._co.style.display = cam ? "none" : "flex";
-}
-
-// ── Speaking ───────────────────────────────────────────────
-function markSpeaking(id, on) {
-  const tile = document.getElementById("t" + id);
-  if (!tile) return;
-
-  if (on) {
-    tile.classList.add("speaking");
-    speakerId = id;
-    if (!pinnedId) promoteToTop(id);
-  } else {
-    tile.classList.remove("speaking");
-    if (speakerId === id) {
-      speakerId = null;
-      if (!pinnedId) demoteFromTop(id);
+      pinnedId = null;
     }
-  }
-}
 
-// ── Screen share tile ──────────────────────────────────────
-function markSharing(id, on) {
-  const tile = document.getElementById("t" + id);
-  if (!tile) return;
-
-  if (on) {
-    tile.classList.add("sharing");
-    // badge
-    if (!tile.querySelector(".share-badge")) {
-      const b = document.createElement("div");
-      b.className = "share-badge"; b.textContent = "📡 Sharing";
-      tile.appendChild(b);
+    if (!wasPinned) {
+      var tile = document.getElementById("tile-" + id);
+      if (!tile) return;
+      pinnedId = id;
+      tile.classList.add("pinned");
+      var nameEl = tile.querySelector(".name");
+      if (nameEl) {
+        var tag = document.createElement("span");
+        tag.className   = "pin-tag";
+        tag.textContent = "📌";
+        nameEl.appendChild(tag);
+      }
+      var dispName = tile.dataset.name || "Participant";
+      toast("📌 " + dispName + " pinned", "info", 2000);
     }
-    if (!pinnedId) promoteToTop(id);
-  } else {
-    tile.classList.remove("sharing");
-    tile.querySelector(".share-badge")?.remove();
-    if (!pinnedId) demoteFromTop(id);
+
+    updateGridClass();
+    refreshThumbStrip();
   }
-}
 
-// ── Spotlight: move one tile to "first" position ───────────
-// CSS order property: -1 = first, 0 = normal
-function promoteToTop(id) {
-  // Reset all
-  grid.querySelectorAll(".vt").forEach(t => t.style.order = "");
-  const tile = document.getElementById("t" + id);
-  if (tile) tile.style.order = "-1";
-  applySpotlightLayout(id);
-}
+  // ──────────────────────────────────────────────────────────────────────────
+  // VIDEO TILES
+  // ──────────────────────────────────────────────────────────────────────────
+  function addVideoTile(stream, id, isLocal, displayName, micOn, camOn) {
+    if (document.getElementById("tile-" + id)) return;
+    isLocal     = isLocal     !== undefined ? isLocal     : false;
+    displayName = displayName || "";
+    micOn       = micOn       !== undefined ? micOn       : true;
+    camOn       = camOn       !== undefined ? camOn       : true;
 
-function demoteFromTop(id) {
-  const tile = document.getElementById("t" + id);
-  if (tile) tile.style.order = "";
-  grid.classList.remove("spotlight-mode");
-}
+    peerNames[id] = displayName;
 
-function applySpotlightLayout(id) {
-  const n = grid.querySelectorAll(".vt").length;
-  if (n < 2) return; // no need for spotlight with 1 person
-  grid.classList.add("spotlight-mode");
+    var tile = document.createElement("div");
+    tile.className = "video-container";
+    tile.id        = "tile-" + id;
+    tile.dataset.name  = displayName;
+    tile.dataset.micOn = String(micOn);
+    tile.dataset.camOn = String(camOn);
 
-  // Move all non-spotlight tiles into the strip
-  const strip = getOrCreateStrip();
-  grid.querySelectorAll(".vt").forEach(tile => {
-    const tId = tile.id.replace("t", "");
-    if (tId === id) {
-      tile.classList.add("vt-spotlight");
-      tile.classList.remove("vt-strip-item");
-      grid.insertBefore(tile, strip); // ensure it's before strip
-    } else {
-      tile.classList.remove("vt-spotlight");
-      tile.classList.add("vt-strip-item");
-      strip.appendChild(tile);
-    }
-  });
-}
+    // Video element
+    var video = document.createElement("video");
+    video.srcObject  = stream;
+    video.autoplay   = true;
+    video.playsInline = true;
+    video.muted      = isLocal;
+    tile.appendChild(video);
 
-function exitSpotlightLayout() {
-  const strip = document.getElementById("tile-strip");
-  if (strip) {
-    // Move all tiles back to grid
-    Array.from(strip.children).forEach(tile => {
-      tile.classList.remove("vt-strip-item");
-      grid.appendChild(tile);
+    // Cam-off avatar
+    var placeholder = document.createElement("div");
+    placeholder.className    = "cam-placeholder";
+    placeholder.style.display = camOn ? "none" : "flex";
+    var avatar = document.createElement("div");
+    avatar.className   = "avatar-circle";
+    avatar.textContent = getInitials(displayName);
+    placeholder.appendChild(avatar);
+    tile.appendChild(placeholder);
+
+    // Pin overlay
+    var overlay = document.createElement("div");
+    overlay.className = "tile-overlay";
+    var pinBtn = document.createElement("button");
+    pinBtn.className   = "pin-btn";
+    pinBtn.title       = "Pin / Unpin";
+    pinBtn.textContent = "📌";
+    pinBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      pinTile(id);
     });
-    strip.remove();
-  }
-  grid.querySelectorAll(".vt").forEach(t => {
-    t.classList.remove("vt-spotlight");
-    t.style.order = "";
-  });
-  grid.classList.remove("spotlight-mode");
-}
+    overlay.appendChild(pinBtn);
+    tile.appendChild(overlay);
 
-function getOrCreateStrip() {
-  let strip = document.getElementById("tile-strip");
-  if (!strip) {
-    strip = document.createElement("div");
-    strip.id = "tile-strip";
-    strip.className = "vt-strip";
-    grid.appendChild(strip);
-  }
-  return strip;
-}
+    // Info bar
+    var infoBar = document.createElement("div");
+    infoBar.className = "video-info";
 
-// ── Pin ────────────────────────────────────────────────────
-function togglePin(id) {
-  if (pinnedId === id) {
-    // unpin
-    socket.emit("unpin", { roomId: ROOM });
-    applyPin(null, true);
-  } else {
-    socket.emit("pin", { roomId: ROOM, peerId: id });
-    applyPin(id, true);
-  }
-}
-
-function applyPin(id, showToast) {
-  pinnedId = id;
-
-  // Exit spotlight mode first (pin takes over)
-  exitSpotlightLayout();
-
-  grid.querySelectorAll(".vt").forEach(tile => {
-    const tid = tile.id.replace("t", "");
-    const isPin = tid === id;
-    tile.classList.toggle("pinned", isPin);
-    const pb = tile.querySelector(".pin-btn");
-    if (pb) {
-      pb.title    = isPin ? "Unpin" : "Pin this tile";
-      pb.textContent = isPin ? "📍" : "📌";
+    var nameSpan = document.createElement("span");
+    nameSpan.className   = "name";
+    nameSpan.textContent = isLocal ? "You" : (displayName || id.slice(0, 8));
+    if (isLocal) {
+      var youTag = document.createElement("span");
+      youTag.className   = "you-tag";
+      youTag.textContent = "YOU";
+      nameSpan.appendChild(youTag);
     }
-    tile.style.order = isPin ? "-1" : "";
+
+    var mediaIcons = document.createElement("div");
+    mediaIcons.className = "media-icons";
+
+    var micIcon = document.createElement("span");
+    micIcon.className   = "media-icon";
+    micIcon.textContent = micOn ? "🎤" : "🔇";
+    if (!micOn) micIcon.classList.add("off");
+
+    var camIcon = document.createElement("span");
+    camIcon.className   = "media-icon";
+    camIcon.textContent = camOn ? "📷" : "🚫";
+    if (!camOn) camIcon.classList.add("off");
+
+    mediaIcons.appendChild(micIcon);
+    mediaIcons.appendChild(camIcon);
+    infoBar.appendChild(nameSpan);
+    infoBar.appendChild(mediaIcons);
+    tile.appendChild(infoBar);
+
+    tile._video       = video;
+    tile._placeholder = placeholder;
+    tile._micIcon     = micIcon;
+    tile._camIcon     = camIcon;
+
+    videoGrid.appendChild(tile);
+    updateGridClass();
+    refreshThumbStrip();
+  }
+
+  function removeVideoTile(id) {
+    var el = document.getElementById("tile-" + id);
+    if (!el) return;
+    el.remove();
+    teardownAudioAnalyser(id);
+    delete peerNames[id];
+    if (pinnedId === id)      pinnedId = null;
+    if (activeSpeaker === id) activeSpeaker = null;
+    updateGridClass();
+    refreshThumbStrip();
+  }
+
+  function updatePeerMedia(id, micOn, camOn) {
+    var tile = document.getElementById("tile-" + id);
+    if (!tile) return;
+    if (tile._micIcon) {
+      tile._micIcon.textContent = micOn ? "🎤" : "🔇";
+      tile._micIcon.classList.toggle("off", !micOn);
+    }
+    if (tile._camIcon) {
+      tile._camIcon.textContent = camOn ? "📷" : "🚫";
+      tile._camIcon.classList.toggle("off", !camOn);
+    }
+    if (tile._placeholder) {
+      tile._placeholder.style.display = camOn ? "none" : "flex";
+    }
+  }
+
+  function syncLocalIcons() {
+    var tile = document.getElementById("tile-" + socket.id);
+    if (!tile) return;
+    if (tile._micIcon) {
+      tile._micIcon.textContent = isMicOn ? "🎤" : "🔇";
+      tile._micIcon.classList.toggle("off", !isMicOn);
+    }
+    if (tile._camIcon) {
+      tile._camIcon.textContent = isCamOn ? "📷" : "🚫";
+      tile._camIcon.classList.toggle("off", !isCamOn);
+    }
+    if (tile._placeholder) {
+      tile._placeholder.style.display = isCamOn ? "none" : "flex";
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // WebRTC PEERS
+  // ──────────────────────────────────────────────────────────────────────────
+  var ICE_CONFIG = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+      { urls: "stun:stun.cloudflare.com:3478"  },
+      // Add TURN here for production cross-NAT support:
+      // { urls: "turn:YOUR_TURN_SERVER", username: "user", credential: "pass" }
+    ],
+    bundlePolicy:   "max-bundle",
+    rtcpMuxPolicy:  "require",
+  };
+
+  function createPeer(id, initiator, remoteName) {
+    if (peers[id]) { peers[id].close(); }
+
+    var peer = new RTCPeerConnection(ICE_CONFIG);
+    peers[id]     = peer;
+    peerNames[id] = remoteName;
+
+    // Add local tracks
+    if (localStream) {
+      localStream.getTracks().forEach(function (track) {
+        peer.addTrack(track, localStream);
+      });
+    }
+
+    // Receive remote tracks
+    peer.ontrack = function (e) {
+      var remoteStream = e.streams[0];
+      var tile = document.getElementById("tile-" + id);
+      if (tile) {
+        tile._video.srcObject = remoteStream;
+      } else {
+        addVideoTile(remoteStream, id, false, remoteName || "Peer", true, true);
+      }
+      if (e.track.kind === "audio") {
+        teardownAudioAnalyser(id);
+        setupAudioAnalyser(remoteStream, id, false);
+      }
+    };
+
+    // ICE candidates
+    peer.onicecandidate = function (e) {
+      if (e.candidate) {
+        socket.emit("signal", { to: id, data: { candidate: e.candidate } });
+      }
+    };
+
+    // Connection state changes
+    peer.onconnectionstatechange = function () {
+      var state = peer.connectionState;
+      if (state === "connected") {
+        applyMaxBandwidth(peer);
+      } else if (state === "failed") {
+        toast("Connection issue with " + (peerNames[id] || "peer") + ". Reconnecting…", "error");
+        if (initiator) {
+          peer.restartIce();
+          peer.createOffer({ iceRestart: true, offerToReceiveAudio: true, offerToReceiveVideo: true })
+            .then(function (o) { return peer.setLocalDescription(o); })
+            .then(function () {
+              socket.emit("signal", { to: id, data: { sdp: peer.localDescription } });
+            })
+            .catch(console.error);
+        }
+      }
+    };
+
+    if (initiator) {
+      peer.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
+        .then(function (offer) { return peer.setLocalDescription(offer); })
+        .then(function () {
+          socket.emit("signal", { to: id, data: { sdp: peer.localDescription } });
+        })
+        .catch(console.error);
+    }
+
+    return peer;
+  }
+
+  function applyMaxBandwidth(peer) {
+    try {
+      peer.getSenders().forEach(function (sender) {
+        if (sender.track && sender.track.kind === "video") {
+          var params = sender.getParameters();
+          if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+          params.encodings[0].maxBitrate     = 8000000; // 8 Mbps
+          params.encodings[0].maxFramerate   = 60;
+          params.encodings[0].scaleResolutionDownBy = 1.0;
+          sender.setParameters(params).catch(function () {});
+        }
+      });
+    } catch (e) { console.warn("Bandwidth tweak failed:", e); }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // SOCKET EVENTS
+  // ──────────────────────────────────────────────────────────────────────────
+  socket.on("connect", function () {
+    console.log("Socket connected:", socket.id);
   });
 
-  if (id) {
-    applySpotlightLayout(id);
-    if (showToast) toast(`📌 Pinned ${id === socket.id ? "your" : (peerNames[id]||"their")} tile`);
-  } else {
-    if (showToast) toast("Unpinned");
-    relayout();
-  }
-}
-
-// ─────────────────────────────────────────────────────────
-// GRID LAYOUT (data-n drives CSS)
-// ─────────────────────────────────────────────────────────
-function relayout() {
-  const tiles = grid.querySelectorAll(".vt");
-  const n     = tiles.length;
-  grid.dataset.n = Math.min(n, 9);
-  pCount.textContent = n;
-}
-
-// ─────────────────────────────────────────────────────────
-// PEER CONNECTIONS
-// ─────────────────────────────────────────────────────────
-function createPeer(id, initiator, remoteName) {
-  if (peers[id]) { try { peers[id].close(); } catch (_) {} }
-
-  const pc = new RTCPeerConnection(ICE);
-  peers[id] = pc;
-  peerNames[id] = remoteName || "Peer";
-
-  // Add local tracks to peer
-  if (localStream) {
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-  }
-
-  // Prefer high bitrate for video
-  pc.onnegotiationneeded = () => {
-    pc.getSenders().forEach(sender => {
-      if (sender.track?.kind !== "video") return;
-      try {
-        const p = sender.getParameters();
-        if (!p.encodings?.length) p.encodings = [{}];
-        p.encodings.forEach(enc => {
-          enc.maxBitrate   = 8_000_000; // 8 Mbps for 4K
-          enc.maxFramerate = 30;
-          enc.scaleResolutionDownBy = 1;
-        });
-        sender.setParameters(p).catch(() => {});
-      } catch (_) {}
+  socket.on("all-users", function (users) {
+    users.forEach(function (user) {
+      addVideoTile(new MediaStream(), user.id, false, user.name, true, true);
+      createPeer(user.id, true, user.name);
     });
-  };
-
-  // Remote track → update tile video
-  pc.ontrack = e => {
-    const stream = e.streams[0];
-    if (!stream) return;
-    const tile = document.getElementById("t" + id);
-    if (tile) {
-      tile._vid.srcObject = stream;
-    } else {
-      addTile(stream, id, false, remoteName || "Peer");
-    }
-  };
-
-  // ICE
-  pc.onicecandidate = e => {
-    if (e.candidate) socket.emit("signal", { to: id, data: { candidate: e.candidate } });
-  };
-
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === "failed") {
-      try { pc.restartIce(); } catch (_) {}
-    }
-  };
-
-  if (initiator) {
-    pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
-      .then(o => pc.setLocalDescription(o))
-      .then(() => socket.emit("signal", { to: id, data: { sdp: pc.localDescription } }))
-      .catch(console.warn);
-  }
-
-  return pc;
-}
-
-// ─────────────────────────────────────────────────────────
-// SOCKET EVENTS
-// ─────────────────────────────────────────────────────────
-socket.on("connect", () => console.log("socket", socket.id));
-
-socket.on("all-users", users => {
-  users.forEach(u => {
-    addTile(new MediaStream(), u.id, false, u.name);
-    createPeer(u.id, true, u.name);
   });
-});
 
-socket.on("user-joined", u => {
-  toast(`👋 ${u.name} joined`);
-  addTile(new MediaStream(), u.id, false, u.name);
-  createPeer(u.id, false, u.name);
-});
+  socket.on("user-joined", function (user) {
+    toast(user.name + " joined the class", "success");
+    addVideoTile(new MediaStream(), user.id, false, user.name, true, true);
+    createPeer(user.id, false, user.name);
+  });
 
-socket.on("signal", async ({ from, data }) => {
-  if (!peers[from]) createPeer(from, false, peerNames[from]);
-  const pc = peers[from];
-  try {
+  socket.on("signal", function (payload) {
+    var from = payload.from;
+    var data = payload.data;
+    var peer = peers[from];
+    if (!peer) {
+      var tile       = document.getElementById("tile-" + from);
+      var remoteName = tile ? tile.dataset.name : "Peer";
+      peer = createPeer(from, false, remoteName);
+    }
+    var p = Promise.resolve();
     if (data.sdp) {
-      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      if (data.sdp.type === "offer") {
-        const ans = await pc.createAnswer();
-        await pc.setLocalDescription(ans);
-        socket.emit("signal", { to: from, data: { sdp: pc.localDescription } });
-      }
+      p = peer.setRemoteDescription(new RTCSessionDescription(data.sdp))
+        .then(function () {
+          if (data.sdp.type === "offer") {
+            return peer.createAnswer()
+              .then(function (ans) { return peer.setLocalDescription(ans); })
+              .then(function () {
+                socket.emit("signal", { to: from, data: { sdp: peer.localDescription } });
+              });
+          }
+        });
     }
     if (data.candidate) {
-      await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+      p = p.then(function () {
+        return peer.addIceCandidate(new RTCIceCandidate(data.candidate));
+      });
     }
-  } catch (e) { console.warn("signal:", e.message); }
-});
-
-socket.on("user-left", id => {
-  toast(`${peerNames[id] || "Someone"} left`);
-  peers[id]?.close();
-  delete peers[id];
-  removeTile(id);
-});
-
-socket.on("room-count", n => { pCount.textContent = n; });
-
-socket.on("peer-state", ({ id, mic, cam }) => setTileMedia(id, mic, cam));
-
-socket.on("peer-speaking", ({ id, on }) => markSpeaking(id, on));
-
-socket.on("peer-screen-on",  ({ id, name }) => {
-  markSharing(id, true);
-  toast(`🖥️ ${name || "Someone"} is sharing their screen`);
-});
-socket.on("peer-screen-off", ({ id }) => markSharing(id, false));
-
-socket.on("peer-hand", ({ id, name }) => {
-  toast(`✋ ${name || "Someone"} raised their hand`);
-  const tile = document.getElementById("t" + id);
-  if (tile && !tile.querySelector(".hand-badge")) {
-    const b = document.createElement("div");
-    b.className = "hand-badge"; b.innerHTML = "✋ Hand raised";
-    tile.appendChild(b);
-    setTimeout(() => b.remove(), 9000);
-  }
-});
-
-socket.on("do-pin",   ({ peerId }) => applyPin(peerId, false));
-socket.on("do-unpin", ()           => applyPin(null,   false));
-
-socket.on("chat-msg", ({ name, message, ts }) => {
-  appendMsg(name, message, false, ts);
-  if (!chatOpen) {
-    unreadCount++;
-    unread.textContent = unreadCount;
-    unread.classList.remove("hidden");
-  }
-});
-
-socket.on("disconnect", () => toast("Disconnected from server", "err"));
-
-// ─────────────────────────────────────────────────────────
-// CHAT
-// ─────────────────────────────────────────────────────────
-function appendMsg(name, message, isMe, ts) {
-  if (name === null || name === undefined) {
-    const el = document.createElement("div");
-    el.className = "csys"; el.textContent = message;
-    chatLog.appendChild(el);
-  } else {
-    const wrap = document.createElement("div");
-    wrap.className = `cmsg ${isMe ? "me" : "them"}`;
-    if (!isMe) {
-      const s = document.createElement("span");
-      s.className = "cm-sender"; s.textContent = name;
-      wrap.appendChild(s);
-    }
-    const b = document.createElement("div");
-    b.className = "cm-bubble"; b.textContent = message;
-    wrap.appendChild(b);
-    const t = document.createElement("span");
-    t.className = "cm-time";
-    t.textContent = ts ? new Date(ts).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }) : "";
-    wrap.appendChild(t);
-    chatLog.appendChild(wrap);
-  }
-  chatLog.scrollTop = chatLog.scrollHeight;
-}
-
-function sysMsg(text) { appendMsg(null, text, false); }
-
-function sendChat() {
-  const msg = chatInput.value.trim();
-  if (!msg) return;
-  socket.emit("chat-msg", { roomId: ROOM, message: msg });
-  appendMsg(ME, msg, true, Date.now());
-  chatInput.value = "";
-}
-btnSend.addEventListener("click", sendChat);
-chatInput.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
-
-// ─────────────────────────────────────────────────────────
-// CONTROLS
-// ─────────────────────────────────────────────────────────
-
-// Mic toggle
-btnMic.addEventListener("click", () => {
-  micOn = !micOn;
-  localStream?.getAudioTracks().forEach(t => t.enabled = micOn);
-  btnMic.classList.toggle("active", micOn);
-  btnMic.classList.toggle("off",    !micOn);
-  btnMic.querySelector(".cb-lbl").textContent = micOn ? "Mute" : "Unmute";
-  socket.emit("media-state", { roomId: ROOM, mic: micOn, cam: camOn });
-  setTileMedia(socket.id, micOn, camOn);
-});
-
-// Camera toggle
-btnCam.addEventListener("click", () => {
-  camOn = !camOn;
-  localStream?.getVideoTracks().forEach(t => t.enabled = camOn);
-  btnCam.classList.toggle("active", camOn);
-  btnCam.classList.toggle("off",    !camOn);
-  btnCam.querySelector(".cb-lbl").textContent = camOn ? "Camera" : "Cam Off";
-  socket.emit("media-state", { roomId: ROOM, mic: micOn, cam: camOn });
-  setTileMedia(socket.id, micOn, camOn);
-});
-
-// ── Screen share / Phone share ─────────────────────────────
-btnShare.addEventListener("click", () => sharing ? stopShare() : startShare());
-
-async function startShare() {
-  if (isMobile) {
-    await startMobileShare();
-  } else {
-    await startDesktopShare();
-  }
-}
-
-// Desktop: getDisplayMedia
-async function startDesktopShare() {
-  try {
-    screenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        width:     { ideal: 3840 },
-        height:    { ideal: 2160 },
-        frameRate: { ideal: 30, max: 60 },
-        cursor:    "always",
-      },
-      audio: { echoCancellation: false, noiseSuppression: false },
-    });
-    await applyScreenTrack(screenStream.getVideoTracks()[0]);
-    screenStream.getVideoTracks()[0].addEventListener("ended", stopShare);
-    toast("🖥️ Screen sharing started", "ok");
-  } catch (err) {
-    if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
-      toast("Screen share failed: " + err.message, "err");
-    }
-    screenStream = null;
-  }
-}
-
-// Mobile: no getDisplayMedia → use rear camera as "share"
-async function startMobileShare() {
-  // First try environment camera (rear)
-  const attempts = [
-    { video: { facingMode: { exact: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
-    { video: { facingMode: "environment" }, audio: false },
-    { video: { facingMode: "user"        }, audio: false },
-    { video: true,                           audio: false },
-  ];
-
-  for (const c of attempts) {
-    try {
-      screenStream = await navigator.mediaDevices.getUserMedia(c);
-      await applyScreenTrack(screenStream.getVideoTracks()[0]);
-      toast("📸 Sharing camera (phone mode)", "ok");
-      return;
-    } catch (_) {}
-  }
-  toast("Camera share unavailable on this device", "err");
-  screenStream = null;
-}
-
-// Replace video track in all peer connections
-async function applyScreenTrack(track) {
-  const replaces = Object.values(peers).map(pc => {
-    const sender = pc.getSenders().find(s => s.track?.kind === "video");
-    return sender ? sender.replaceTrack(track).catch(() => {}) : Promise.resolve();
+    p.catch(function (err) { console.error("Signal error:", err); });
   });
-  await Promise.all(replaces);
 
-  // Update local tile preview
-  const tile = document.getElementById("t" + socket.id);
-  if (tile) tile._vid.srcObject = new MediaStream([track]);
+  socket.on("user-left", function (id) {
+    var tile = document.getElementById("tile-" + id);
+    var name = tile ? tile.dataset.name : "A participant";
+    toast(name + " left the class");
+    if (peers[id]) { peers[id].close(); delete peers[id]; }
+    removeVideoTile(id);
+  });
 
-  sharing = true;
-  btnShare.classList.add("sharing");
-  btnShare.querySelector(".cb-lbl").textContent = "Stop";
-  socket.emit("screen-on", { roomId: ROOM });
-  markSharing(socket.id, true);
-}
+  socket.on("participant-count", function (count) {
+    participantCount.textContent = count;
+  });
 
-async function stopShare() {
-  if (!screenStream) return;
-  screenStream.getTracks().forEach(t => t.stop());
-  screenStream = null;
+  socket.on("peer-media-state", function (payload) {
+    updatePeerMedia(payload.id, payload.micOn, payload.camOn);
+  });
 
-  // Restore camera track
-  const camTrack = localStream?.getVideoTracks()[0];
-  if (camTrack) {
-    const replaces = Object.values(peers).map(pc => {
-      const sender = pc.getSenders().find(s => s.track?.kind === "video");
-      return sender ? sender.replaceTrack(camTrack).catch(() => {}) : Promise.resolve();
-    });
-    await Promise.all(replaces);
+  socket.on("peer-raised-hand", function (payload) {
+    toast("✋ " + payload.name + " raised their hand", "info");
+    var tile = document.getElementById("tile-" + payload.id);
+    if (tile && !tile.querySelector(".hand-badge")) {
+      var badge = document.createElement("div");
+      badge.className   = "hand-badge";
+      badge.textContent = "✋ Raised hand";
+      tile.appendChild(badge);
+      setTimeout(function () { badge.remove(); }, 8000);
+    }
+  });
+
+  socket.on("peer-speaking", function (payload) {
+    var tile = document.getElementById("tile-" + payload.id);
+    if (tile) tile.classList.toggle("is-speaker", payload.isSpeaking);
+    var thumb = thumbStrip.querySelector("[data-id='" + payload.id + "']");
+    if (thumb) thumb.classList.toggle("is-speaker", payload.isSpeaking);
+    if (payload.isSpeaking && !pinnedId) {
+      activeSpeaker = payload.id;
+      updateSpeakerProminence();
+      clearTimeout(speakerTimer);
+      speakerTimer = setTimeout(function () {
+        if (!pinnedId) { activeSpeaker = null; updateSpeakerProminence(); }
+      }, 3000);
+    }
+  });
+
+  socket.on("peer-screen-share", function (payload) {
+    var tile = document.getElementById("tile-" + payload.id);
+    if (tile) tile.classList.toggle("is-sharing", payload.isSharing);
+    if (payload.isSharing) {
+      toast("🖥️ " + payload.name + " is sharing screen", "info");
+      if (!pinnedId) pinTile(payload.id);
+    } else {
+      toast("🖥️ " + payload.name + " stopped sharing", "info");
+      if (pinnedId === payload.id) pinTile(payload.id); // unpin
+    }
+  });
+
+  socket.on("chat-message", function (msg) {
+    appendChatMessage(msg.sender, msg.message, false, msg.ts);
+    if (!isChatOpen) {
+      unreadCount++;
+      chatUnread.textContent   = unreadCount;
+      chatUnread.style.display = "";
+    }
+  });
+
+  socket.on("disconnect", function () {
+    toast("Disconnected from server", "error");
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // CHAT
+  // ──────────────────────────────────────────────────────────────────────────
+  function appendChatMessage(sender, message, isSelf, ts) {
+    ts = ts || Date.now();
+
+    if (!sender) {
+      var sys = document.createElement("div");
+      sys.className   = "chat-system";
+      sys.textContent = message;
+      chatMessages.appendChild(sys);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return;
+    }
+
+    var wrap = document.createElement("div");
+    wrap.className = "chat-msg " + (isSelf ? "self" : "other");
+
+    if (!isSelf) {
+      var senderEl = document.createElement("span");
+      senderEl.className   = "msg-sender";
+      senderEl.textContent = sender;
+      wrap.appendChild(senderEl);
+    }
+
+    var bubble = document.createElement("div");
+    bubble.className   = "msg-bubble";
+    bubble.textContent = message;
+    wrap.appendChild(bubble);
+
+    var timeEl = document.createElement("span");
+    timeEl.className   = "msg-time";
+    timeEl.textContent = new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    wrap.appendChild(timeEl);
+
+    chatMessages.appendChild(wrap);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
-  // Restore local tile
-  const tile = document.getElementById("t" + socket.id);
-  if (tile && localStream) tile._vid.srcObject = localStream;
+  function sendMessage() {
+    var msg = chatInput.value.trim();
+    if (!msg) return;
+    var ts = Date.now();
+    socket.emit("chat-message", { roomId: roomId, sender: userName, message: msg, ts: ts });
+    appendChatMessage(userName, msg, true, ts);
+    chatInput.value = "";
+  }
 
-  sharing = false;
-  btnShare.classList.remove("sharing");
-  btnShare.querySelector(".cb-lbl").textContent = "Share";
-  socket.emit("screen-off", { roomId: ROOM });
-  markSharing(socket.id, false);
-  toast("🛑 Sharing stopped");
-}
+  sendMsgBtn.addEventListener("click", sendMessage);
+  chatInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
 
-// Raise hand
-btnHand.addEventListener("click", () => {
-  handUp = !handUp;
-  btnHand.classList.toggle("hand-up", handUp);
-  btnHand.querySelector(".cb-lbl").textContent = handUp ? "Lower" : "Hand";
-  if (handUp) {
-    socket.emit("raise-hand", { roomId: ROOM });
-    toast("✋ Hand raised — visible to everyone");
-    setTimeout(() => {
-      if (handUp) {
-        handUp = false;
-        btnHand.classList.remove("hand-up");
-        btnHand.querySelector(".cb-lbl").textContent = "Hand";
+  // ──────────────────────────────────────────────────────────────────────────
+  // CONTROL BUTTONS
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // Mic
+  micBtn.addEventListener("click", function () {
+    isMicOn = !isMicOn;
+    if (localStream) {
+      localStream.getAudioTracks().forEach(function (t) { t.enabled = isMicOn; });
+    }
+    micBtn.classList.toggle("active", isMicOn);
+    micBtn.classList.toggle("muted",  !isMicOn);
+    micBtn.querySelector(".ctrl-label").textContent = isMicOn ? "Mute" : "Unmute";
+    syncLocalIcons();
+    socket.emit("media-state", { roomId: roomId, micOn: isMicOn, camOn: isCamOn });
+  });
+
+  // Camera
+  camBtn.addEventListener("click", function () {
+    isCamOn = !isCamOn;
+    if (localStream) {
+      localStream.getVideoTracks().forEach(function (t) { t.enabled = isCamOn; });
+    }
+    camBtn.classList.toggle("active", isCamOn);
+    camBtn.classList.toggle("muted",  !isCamOn);
+    camBtn.querySelector(".ctrl-label").textContent = isCamOn ? "Camera" : "Cam Off";
+    syncLocalIcons();
+    socket.emit("media-state", { roomId: roomId, micOn: isMicOn, camOn: isCamOn });
+  });
+
+  // Chat open/close
+  toggleChatBtn.addEventListener("click", function () {
+    isChatOpen ? closeChat() : openChat();
+  });
+  closeChatBtn.addEventListener("click", closeChat);
+
+  function openChat() {
+    chatPanel.style.display = "flex";
+    isChatOpen     = true;
+    unreadCount    = 0;
+    chatUnread.style.display = "none";
+    toggleChatBtn.classList.add("active");
+    setTimeout(function () { chatInput.focus(); }, 200);
+  }
+  function closeChat() {
+    chatPanel.style.display = "none";
+    isChatOpen = false;
+    toggleChatBtn.classList.remove("active");
+  }
+
+  // Raise hand
+  raiseHandBtn.addEventListener("click", function () {
+    isHandRaised = !isHandRaised;
+    raiseHandBtn.classList.toggle("hand-active", isHandRaised);
+    raiseHandBtn.querySelector(".ctrl-label").textContent = isHandRaised ? "Lower" : "Hand";
+    if (isHandRaised) {
+      socket.emit("raise-hand", { roomId: roomId });
+      toast("You raised your hand ✋");
+      setTimeout(function () {
+        if (isHandRaised) {
+          isHandRaised = false;
+          raiseHandBtn.classList.remove("hand-active");
+          raiseHandBtn.querySelector(".ctrl-label").textContent = "Hand";
+        }
+      }, 30000);
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // SCREEN SHARE
+  // ──────────────────────────────────────────────────────────────────────────
+  shareScreenBtn.addEventListener("click", function () {
+    if (screenStream) {
+      stopScreenShare();
+      return;
+    }
+    // Mobile fallback
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia || isMobileDevice()) {
+      screenShareFallback.style.display = "flex";
+      return;
+    }
+    startScreenShare();
+  });
+
+  ssfClose.addEventListener("click", function () {
+    screenShareFallback.style.display = "none";
+  });
+
+  function startScreenShare() {
+    navigator.mediaDevices.getDisplayMedia({
+      video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+      audio: true,
+    })
+    .then(function (stream) {
+      screenStream = stream;
+      var screenTrack = stream.getVideoTracks()[0];
+
+      // Replace video track in all peers
+      Object.values(peers).forEach(function (peer) {
+        var sender = peer.getSenders().find(function (s) { return s.track && s.track.kind === "video"; });
+        if (sender) sender.replaceTrack(screenTrack).catch(console.error);
+      });
+
+      // Update local tile
+      var localTile = document.getElementById("tile-" + socket.id);
+      if (localTile) {
+        localTile._video.srcObject = stream;
+        localTile.classList.add("is-sharing");
       }
-    }, 30000);
+
+      shareScreenBtn.classList.add("screen-active");
+      shareScreenBtn.querySelector(".ctrl-label").textContent = "Stop";
+      socket.emit("screen-share-state", { roomId: roomId, isSharing: true });
+      toast("Screen sharing started 🖥️", "success");
+
+      screenTrack.addEventListener("ended", stopScreenShare);
+    })
+    .catch(function (err) {
+      if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
+        toast("Screen share failed: " + err.message, "error");
+      }
+      screenStream = null;
+    });
   }
-});
 
-// Chat
-function openChat() {
-  chatPanel.classList.add("open");
-  chatOpen = true;
-  unreadCount = 0;
-  unread.classList.add("hidden");
-  btnChat.classList.add("active");
-  setTimeout(() => chatInput.focus(), 300);
-}
-function closeChat() {
-  chatPanel.classList.remove("open");
-  chatOpen = false;
-  btnChat.classList.remove("active");
-}
-btnChat.addEventListener("click",      () => chatOpen ? closeChat() : openChat());
-btnCloseChat.addEventListener("click", closeChat);
+  function stopScreenShare() {
+    if (!screenStream) return;
+    var videoTrack = localStream && localStream.getVideoTracks()[0];
+    Object.values(peers).forEach(function (peer) {
+      var sender = peer.getSenders().find(function (s) { return s.track && s.track.kind === "video"; });
+      if (sender && videoTrack) sender.replaceTrack(videoTrack).catch(console.error);
+    });
+    var localTile = document.getElementById("tile-" + socket.id);
+    if (localTile) {
+      if (localStream) localTile._video.srcObject = localStream;
+      localTile.classList.remove("is-sharing");
+    }
+    screenStream.getTracks().forEach(function (t) { t.stop(); });
+    screenStream = null;
+    shareScreenBtn.classList.remove("screen-active");
+    shareScreenBtn.querySelector(".ctrl-label").textContent = "Share";
+    socket.emit("screen-share-state", { roomId: roomId, isSharing: false });
+    toast("Screen sharing stopped");
+  }
 
-// Leave
-btnLeave.addEventListener("click", () => leaveModal.classList.remove("hidden"));
-btnStay.addEventListener("click",  () => leaveModal.classList.add("hidden"));
-btnGo.addEventListener("click",    () => { leaveModal.classList.add("hidden"); doLeave(); });
+  // ──────────────────────────────────────────────────────────────────────────
+  // LEAVE
+  // ──────────────────────────────────────────────────────────────────────────
+  leaveBtn.addEventListener("click", function () {
+    leaveModal.style.display = "flex";
+  });
+  cancelLeave.addEventListener("click", function () {
+    leaveModal.style.display = "none";
+  });
+  confirmLeave.addEventListener("click", cleanupAndLeave);
 
-function doLeave() {
-  Object.values(peers).forEach(pc => { try { pc.close(); } catch (_) {} });
-  localStream?.getTracks().forEach(t => t.stop());
-  screenStream?.getTracks().forEach(t => t.stop());
-  socket.disconnect();
-  location.href = "/";
-}
+  function cleanupAndLeave() {
+    Object.keys(peers).forEach(function (id) { peers[id].close(); });
+    Object.keys(audioAnalysers).forEach(teardownAudioAnalyser);
+    if (localStream)  localStream.getTracks().forEach(function (t) { t.stop(); });
+    if (screenStream) screenStream.getTracks().forEach(function (t) { t.stop(); });
+    socket.disconnect();
+    window.location.href = "/";
+  }
 
-window.addEventListener("beforeunload", () => {
-  try { socket.disconnect(); } catch (_) {}
-});
+  window.addEventListener("beforeunload", function () { socket.disconnect(); });
 
-// ─────────────────────────────────────────────────────────
-// TOASTS
-// ─────────────────────────────────────────────────────────
-function toast(msg, type = "", dur = 3500) {
-  const el = document.createElement("div");
-  el.className = "toast" + (type ? " " + type : "");
-  const ico = type === "err" ? "❌" : type === "ok" ? "✅" : "ℹ️";
-  el.innerHTML = `<span>${ico}</span><span>${msg}</span>`;
-  toastsEl.appendChild(el);
-  setTimeout(() => {
-    el.style.animation = "tOut .3s var(--ez) forwards";
-    el.addEventListener("animationend", () => el.remove(), { once: true });
-  }, dur);
-}
+  // ──────────────────────────────────────────────────────────────────────────
+  // START
+  // ──────────────────────────────────────────────────────────────────────────
+  getMedia();
+  appendChatMessage(null, "You joined as " + userName);
 
-// ─────────────────────────────────────────────────────────
-// START
-// ─────────────────────────────────────────────────────────
-init();
+})();

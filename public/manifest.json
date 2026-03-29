@@ -1,13 +1,16 @@
 {
-  "name": "EduStream Live Classes",
+  "name": "EduStream — Live Classes",
   "short_name": "EduStream",
+  "description": "4K live classroom with WebRTC, screen sharing, pin participants, real-time chat",
   "start_url": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0C0F1A",
+  "background_color": "#0F1117",
   "theme_color": "#2563EB",
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
     { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
-  ]
+  ],
+  "categories": ["education", "productivity"],
+  "prefer_related_applications": false
 }
