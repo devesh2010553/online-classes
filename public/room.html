@@ -1,36 +1,39 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0F1117" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+  <meta name="theme-color" content="#0A0D14"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <title>EduStream — Live Class</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
-  <link rel="manifest" href="/manifest.json" />
-  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="manifest" href="/manifest.json"/>
+  <link rel="stylesheet" href="/css/style.css"/>
 </head>
 <body class="room-page">
 
-  <!-- HEADER -->
+  <!-- ═══════════════ HEADER ═══════════════ -->
   <header class="room-header">
-    <div class="header-left">
-      <div class="brand-icon small">
+    <div class="hdr-left">
+      <div class="hdr-logo">
         <svg viewBox="0 0 36 36" fill="none">
-          <rect width="36" height="36" rx="10" fill="#2563EB"/>
+          <rect width="36" height="36" rx="10" fill="url(#hlg)"/>
+          <defs><linearGradient id="hlg" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#3B82F6"/><stop offset="100%" stop-color="#6366F1"/>
+          </linearGradient></defs>
           <path d="M10 24V14l8 5 8-5v10" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
           <circle cx="18" cy="13" r="3" fill="white"/>
         </svg>
       </div>
-      <div class="room-meta">
-        <span class="room-label">EduStream</span>
-        <div class="room-info">
-          <span id="roomCode" class="room-code-badge"></span>
-          <span class="live-badge"><span class="live-dot"></span>LIVE</span>
-          <span class="participant-badge">
-            <svg viewBox="0 0 16 16" fill="none">
+      <div class="hdr-meta">
+        <span class="hdr-appname">EduStream</span>
+        <div class="hdr-badges">
+          <span id="roomCode" class="badge-code"></span>
+          <span class="badge-live"><span class="live-pulse"></span>LIVE</span>
+          <span class="badge-users">
+            <svg viewBox="0 0 16 16" fill="none" width="13" height="13">
               <circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.3"/>
               <path d="M1 13c0-2.485 2.239-4.5 5-4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
               <circle cx="12" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/>
@@ -38,129 +41,149 @@
             </svg>
             <span id="participantCount">1</span>
           </span>
+          <span id="qualityBadge" class="badge-quality">HD</span>
         </div>
       </div>
     </div>
 
-    <div class="header-center">
-      <div id="sessionTimer" class="session-timer">00:00</div>
+    <div class="hdr-center">
+      <span id="sessionTimer" class="session-timer">00:00</span>
     </div>
 
-    <div class="header-right controls">
-      <button id="micBtn" class="ctrl-btn active" title="Mute/Unmute">
-        <span class="ctrl-icon">
-          <svg viewBox="0 0 24 24" fill="none">
+    <div class="hdr-right">
+      <button id="micBtn" class="ctrl active" data-label="Mute" title="Mute/Unmute">
+        <span class="ctrl-ico">
+          <svg viewBox="0 0 24 24" fill="none" width="18" height="18">
             <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4Z" stroke="currentColor" stroke-width="1.8"/>
             <path d="M5 10a7 7 0 0 0 14 0M12 19v4M8 23h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
           </svg>
         </span>
-        <span class="ctrl-label">Mute</span>
+        <span class="ctrl-lbl">Mute</span>
       </button>
 
-      <button id="camBtn" class="ctrl-btn active" title="Camera">
-        <span class="ctrl-icon">
-          <svg viewBox="0 0 24 24" fill="none">
+      <button id="camBtn" class="ctrl active" data-label="Camera" title="Camera">
+        <span class="ctrl-ico">
+          <svg viewBox="0 0 24 24" fill="none" width="18" height="18">
             <rect x="2" y="7" width="14" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/>
             <path d="m16 10 5-3v10l-5-3" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
           </svg>
         </span>
-        <span class="ctrl-label">Camera</span>
+        <span class="ctrl-lbl">Camera</span>
       </button>
 
-      <button id="shareScreenBtn" class="ctrl-btn" title="Share Screen">
-        <span class="ctrl-icon">
-          <svg viewBox="0 0 24 24" fill="none">
+      <button id="shareBtn" class="ctrl" title="Share Screen / Camera">
+        <span class="ctrl-ico">
+          <svg viewBox="0 0 24 24" fill="none" width="18" height="18">
             <rect x="2" y="4" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
             <path d="M8 22h8M12 18v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
             <path d="M9 11l3-3 3 3M12 8v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
           </svg>
         </span>
-        <span class="ctrl-label">Share</span>
+        <span class="ctrl-lbl">Share</span>
       </button>
 
-      <button id="raiseHandBtn" class="ctrl-btn" title="Raise Hand">
-        <span class="ctrl-icon" style="font-size:18px;">✋</span>
-        <span class="ctrl-label">Hand</span>
+      <button id="handBtn" class="ctrl" title="Raise Hand">
+        <span class="ctrl-ico" style="font-size:17px;line-height:1">✋</span>
+        <span class="ctrl-lbl">Hand</span>
       </button>
 
-      <button id="toggleChatBtn" class="ctrl-btn" title="Chat">
-        <span class="ctrl-icon">
-          <svg viewBox="0 0 24 24" fill="none">
+      <button id="chatBtn" class="ctrl" title="Chat">
+        <span class="ctrl-ico">
+          <svg viewBox="0 0 24 24" fill="none" width="18" height="18">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
           </svg>
         </span>
-        <span class="ctrl-label">Chat</span>
-        <span id="chatUnread" class="unread-badge" style="display:none;">0</span>
+        <span class="ctrl-lbl">Chat</span>
+        <span id="chatBadge" class="chat-badge" style="display:none">0</span>
       </button>
 
-      <button id="leaveBtn" class="ctrl-btn danger" title="Leave">
-        <span class="ctrl-icon">
-          <svg viewBox="0 0 24 24" fill="none">
+      <button id="leaveBtn" class="ctrl danger" title="Leave">
+        <span class="ctrl-ico">
+          <svg viewBox="0 0 24 24" fill="none" width="18" height="18">
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </span>
-        <span class="ctrl-label">Leave</span>
+        <span class="ctrl-lbl">Leave</span>
       </button>
     </div>
   </header>
 
-  <!-- MAIN AREA -->
+  <!-- ═══════════════ MAIN ═══════════════ -->
   <main class="room-main">
-    <div id="videoGrid" class="video-grid"></div>
-
-    <!-- Thumbnail strip (shown when pinned) -->
-    <div id="thumbStrip" class="thumb-strip" style="display:none;"></div>
-
-    <!-- Chat Panel -->
-    <aside id="chatPanel" class="chat-panel" style="display:none;">
-      <div class="chat-header">
-        <h3>Class Chat</h3>
-        <button id="closeChatBtn" class="icon-btn" title="Close">
-          <svg viewBox="0 0 24 24" fill="none">
-            <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-        </button>
+    <div id="videoGrid" class="video-grid grid-1"></div>
+    <div id="thumbStrip" class="thumb-strip" style="display:none"></div>
+    <aside id="chatPanel" class="chat-panel" style="display:none">
+      <div class="chat-hdr">
+        <span>Class Chat</span>
+        <button id="chatClose" class="icon-close">✕</button>
       </div>
-      <div id="chatMessages" class="chat-messages"></div>
-      <div class="chat-input-area">
-        <input id="chatInput" type="text" placeholder="Type a message…" maxlength="500" autocomplete="off" />
-        <button id="sendMsgBtn" class="send-btn" title="Send">
-          <svg viewBox="0 0 24 24" fill="none">
-            <path d="m22 2-11 11M22 2 15 22l-4-9-9-4 20-7Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <div id="chatMsgs" class="chat-msgs"></div>
+      <div class="chat-input-row">
+        <input id="chatInput" type="text" placeholder="Type a message…" maxlength="500" autocomplete="off"/>
+        <button id="chatSend" class="chat-send-btn">
+          <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
+            <path d="m22 2-11 11M22 2 15 22l-4-9-9-4 20-7Z" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
       </div>
     </aside>
   </main>
 
-  <!-- Screen share fallback for mobile -->
-  <div id="screenShareFallback" class="modal-overlay" style="display:none;">
-    <div class="modal" style="text-align:center;">
-      <div style="font-size:40px;margin-bottom:12px;">📱</div>
-      <h3>Screen Share Not Available</h3>
-      <p>Screen sharing is not supported on mobile browsers. Please use a desktop/laptop to share your screen.</p>
-      <div class="modal-actions" style="justify-content:center;margin-top:16px;">
-        <button id="ssfClose" class="modal-confirm">Got it</button>
+  <!-- ═══════════════ SHARE MODAL ═══════════════ -->
+  <!-- Shown on desktop AND mobile — different options revealed per device -->
+  <div id="shareModal" class="overlay" style="display:none">
+    <div class="modal share-modal">
+      <div class="modal-close-row">
+        <h3 class="modal-title">Share Your Screen</h3>
+        <button id="shareModalClose" class="icon-close">✕</button>
+      </div>
+
+      <!-- Desktop option -->
+      <div id="desktopShareOpt" class="share-opt" style="display:none">
+        <div class="share-opt-icon">🖥️</div>
+        <div>
+          <div class="share-opt-title">Share Desktop / Tab / Window</div>
+          <div class="share-opt-desc">Share your entire screen, a specific app window, or a browser tab in up to 1080p.</div>
+        </div>
+        <button id="startDesktopShare" class="share-opt-btn">Start Sharing</button>
+      </div>
+
+      <!-- Mobile: environment camera (document cam) -->
+      <div id="mobileShareOpt" class="share-opt" style="display:none">
+        <div class="share-opt-icon">📷</div>
+        <div>
+          <div class="share-opt-title">Share via Camera (Document Cam)</div>
+          <div class="share-opt-desc">Point your rear camera at a whiteboard, book, or document. Everyone sees it full-screen in real time.</div>
+        </div>
+        <button id="startMobileCamShare" class="share-opt-btn">Use Camera</button>
+      </div>
+
+      <!-- Mobile: browser limitation note -->
+      <div id="mobileLimitNote" class="share-limit-note" style="display:none">
+        <svg viewBox="0 0 20 20" fill="none" width="16" height="16">
+          <circle cx="10" cy="10" r="9" stroke="#F59E0B" stroke-width="1.5"/>
+          <path d="M10 6v4M10 13v1" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span>Full screen capture is not available in mobile browsers — it requires a native app. The camera option above works on all phones.</span>
       </div>
     </div>
   </div>
 
-  <!-- Leave modal -->
-  <div id="leaveModal" class="modal-overlay" style="display:none;">
+  <!-- ═══════════════ LEAVE MODAL ═══════════════ -->
+  <div id="leaveModal" class="overlay" style="display:none">
     <div class="modal">
-      <h3>Leave Class?</h3>
-      <p>Are you sure you want to leave this session?</p>
-      <div class="modal-actions">
-        <button id="cancelLeave" class="modal-cancel">Stay</button>
-        <button id="confirmLeave" class="modal-confirm">Leave</button>
+      <h3 class="modal-title">Leave Class?</h3>
+      <p class="modal-body">Your peers will see you disconnect.</p>
+      <div class="modal-btns">
+        <button id="cancelLeave" class="btn-secondary">Stay</button>
+        <button id="confirmLeave" class="btn-danger">Leave Now</button>
       </div>
     </div>
   </div>
 
-  <!-- Toast container -->
-  <div id="toastContainer" class="toast-container"></div>
+  <!-- ═══════════════ TOASTS ═══════════════ -->
+  <div id="toasts" class="toasts"></div>
 
-  <!-- Socket.IO (served by the Express/Socket.IO server) -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="/js/room.js"></script>
 </body>
