@@ -1,15 +1,7 @@
 {
-  "name": "edustream-4k",
+  "name": "edustream",
   "version": "4.0.0",
-  "description": "Real-time 4K live classroom — WebRTC mesh, SVC encoding, mobile cam-share, PWA",
   "main": "server/server.js",
-  "scripts": {
-    "start": "node server/server.js",
-    "dev": "node server/server.js"
-  },
-  "dependencies": {
-    "express": "^4.18.2",
-    "socket.io": "^4.7.2"
-  },
-  "engines": { "node": ">=18.0.0" }
+  "scripts": { "start": "node server/server.js" },
+  "dependencies": { "express": "^4.18.2", "socket.io": "^4.7.2" }
 }

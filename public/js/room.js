@@ -1,1017 +1,832 @@
-// EduStream Room Controller v4
-// Real-time 4K · Mobile Camera Share · Speaker Detection · Pin · Simulcast
 "use strict";
-(function () {
+/*
+  EduStream Room Controller v4
+  ────────────────────────────────────────────────────────
+  ✅ HD 1080p / 4K video (best quality the device supports)
+  ✅ Speaker detection   → tile moves to top + bigger
+  ✅ Screen share        → tile moves to top + bigger
+  ✅ Screen share on phone (rear-camera fallback, no crash)
+  ✅ Pin any tile        → double-tap (mobile) / click 📌 (desktop)
+  ✅ Unpin              → tap 📌 again on pinned tile
+  ✅ Real-time chat with unread badge
+  ✅ Mic / Camera toggle with visual feedback
+  ✅ Raise hand
+  ✅ Participant count + session timer
+  ✅ PWA service worker registered
+  ✅ Leave confirmation modal
+  ✅ Toast notifications
+  ✅ Fully responsive: phone portrait/landscape + desktop
+*/
 
-  // ── URL params ─────────────────────────────────────────────────────────────
-  var P      = new URLSearchParams(window.location.search);
-  var ROOM   = P.get("room");
-  var ME     = (P.get("name") || "Anonymous").trim().slice(0, 32);
+// ── PWA ────────────────────────────────────────────────────
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
 
-  if (!ROOM) { alert("No room code — redirecting."); location.href = "/"; return; }
+// ── URL params ─────────────────────────────────────────────
+const qp      = new URLSearchParams(location.search);
+const ROOM    = (qp.get("room") || "").toUpperCase().trim();
+const ME      = (qp.get("name") || "Guest").trim().slice(0, 32);
 
-  // ── DOM ────────────────────────────────────────────────────────────────────
-  var $ = function (id) { return document.getElementById(id); };
-  var videoGrid       = $("videoGrid");
-  var thumbStrip      = $("thumbStrip");
-  var chatPanel       = $("chatPanel");
-  var chatMsgs        = $("chatMsgs");
-  var chatInput       = $("chatInput");
-  var chatSend        = $("chatSend");
-  var chatBtn         = $("chatBtn");
-  var chatClose       = $("chatClose");
-  var chatBadge       = $("chatBadge");
-  var micBtn          = $("micBtn");
-  var camBtn          = $("camBtn");
-  var shareBtn        = $("shareBtn");
-  var handBtn         = $("handBtn");
-  var leaveBtn        = $("leaveBtn");
-  var leaveModal      = $("leaveModal");
-  var cancelLeave     = $("cancelLeave");
-  var confirmLeave    = $("confirmLeave");
-  var shareModal      = $("shareModal");
-  var shareModalClose = $("shareModalClose");
-  var desktopShareOpt = $("desktopShareOpt");
-  var mobileShareOpt  = $("mobileShareOpt");
-  var mobileLimitNote = $("mobileLimitNote");
-  var startDesktopShare    = $("startDesktopShare");
-  var startMobileCamShare  = $("startMobileCamShare");
-  var timerEl         = $("sessionTimer");
-  var countEl         = $("participantCount");
-  var roomCodeEl      = $("roomCode");
-  var qualityBadge    = $("qualityBadge");
-  var toasts          = $("toasts");
+if (!ROOM) { alert("No class code!"); location.href = "/"; throw 0; }
 
-  // ── State ──────────────────────────────────────────────────────────────────
-  var localStream      = null;   // main cam/mic stream
-  var shareStream      = null;   // screen or cam-share stream
-  var isMicOn          = true;
-  var isCamOn          = true;
-  var isChatOpen       = false;
-  var isHandRaised     = false;
-  var unread           = 0;
-  var pinnedId         = null;
-  var activeSpeaker    = null;
-  var speakerTimer     = null;
-  var sessionStart     = Date.now();
-  var peers            = {};     // peerId → RTCPeerConnection
-  var peerNames        = {};     // peerId → displayName
-  var analysers        = {};     // peerId → { ctx, interval }
-  var isMobileShare    = false;  // currently sharing via mobile cam
-  var isDesktopShare   = false;  // currently sharing via getDisplayMedia
-  var acquiredQuality  = "HD";
+// ── Socket ─────────────────────────────────────────────────
+const socket = io({ transports: ["websocket", "polling"] });
 
-  roomCodeEl.textContent = ROOM;
+// ── DOM ────────────────────────────────────────────────────
+const grid        = document.getElementById("grid");
+const chatPanel   = document.getElementById("chatPanel");
+const chatLog     = document.getElementById("chatLog");
+const chatInput   = document.getElementById("chatInput");
+const btnSend     = document.getElementById("btnSend");
+const btnMic      = document.getElementById("btnMic");
+const btnCam      = document.getElementById("btnCam");
+const btnShare    = document.getElementById("btnShare");
+const btnHand     = document.getElementById("btnHand");
+const btnChat     = document.getElementById("btnChat");
+const btnLeave    = document.getElementById("btnLeave");
+const btnCloseChat= document.getElementById("btnCloseChat");
+const pCount      = document.getElementById("pCount");
+const hTimer      = document.getElementById("hTimer");
+const hRoomCode   = document.getElementById("hRoomCode");
+const unread      = document.getElementById("unread");
+const qualBadge   = document.getElementById("qualBadge");
+const leaveModal  = document.getElementById("leaveModal");
+const btnStay     = document.getElementById("btnStay");
+const btnGo       = document.getElementById("btnGo");
+const toastsEl    = document.getElementById("toasts");
 
-  // ── Mobile detection ───────────────────────────────────────────────────────
-  var IS_MOBILE = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent)
-    || (navigator.maxTouchPoints > 2 && /MacIntel/.test(navigator.platform));
+// ── State ──────────────────────────────────────────────────
+let localStream   = null;   // camera+mic
+let screenStream  = null;   // screen / rear cam on mobile
+let micOn         = true;
+let camOn         = true;
+let sharing       = false;
+let handUp        = false;
+let chatOpen      = false;
+let unreadCount   = 0;
+let pinnedId      = null;   // socket.id of pinned peer, or null
+let speakerId     = null;   // currently loudest speaker
+let sessionStart  = Date.now();
+const peers       = {};     // peerId → RTCPeerConnection
+const peerNames   = {};     // peerId → name string
+const isMobile    = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-  var HAS_DISPLAY_MEDIA = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+// ── ICE servers ────────────────────────────────────────────
+const ICE = { iceServers: [
+  { urls: "stun:stun.l.google.com:19302"  },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+]};
 
-  // ── Session timer ──────────────────────────────────────────────────────────
-  setInterval(function () {
-    var t = Math.floor((Date.now() - sessionStart) / 1000);
-    var h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
-    var z = function (n) { return String(n).padStart(2, "0"); };
-    timerEl.textContent = h ? z(h)+":"+z(m)+":"+z(s) : z(m)+":"+z(s);
-  }, 1000);
+// ─────────────────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────────────────
+hRoomCode.textContent = ROOM;
+setInterval(updateTimer, 1000);
 
-  // ── Socket ─────────────────────────────────────────────────────────────────
-  var socket = io({ transports: ["websocket", "polling"] });
+async function init() {
+  await openCamera();
+  socket.emit("join-room", { roomId: ROOM, name: ME });
+  sysMsg(`Joined as "${ME}" · Room ${ROOM}`);
+}
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  TOAST
-  // ══════════════════════════════════════════════════════════════════════════
-  function toast(msg, type, ms) {
-    type = type || "info"; ms = ms || 3500;
-    var el = document.createElement("div");
-    el.className = "toast toast-" + type;
-    var icons = { success: "✅", error: "❌", info: "ℹ️", warn: "⚠️" };
-    el.innerHTML = "<span class='toast-icon'>" + (icons[type]||"ℹ️") + "</span><span>" + msg + "</span>";
-    toasts.appendChild(el);
-    setTimeout(function () {
-      el.classList.add("toast-out");
-      el.addEventListener("transitionend", function () { el.remove(); }, { once: true });
-    }, ms);
-  }
+// ─────────────────────────────────────────────────────────
+// TIMER
+// ─────────────────────────────────────────────────────────
+function updateTimer() {
+  const s = Math.floor((Date.now() - sessionStart) / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sc = s % 60;
+  const p = n => String(n).padStart(2, "0");
+  hTimer.textContent = h ? `${p(h)}:${p(m)}:${p(sc)}` : `${p(m)}:${p(sc)}`;
+}
 
-  function getInitials(name) {
-    return (name || "?").split(" ").slice(0, 2)
-      .map(function (w) { return (w[0] || "").toUpperCase(); }).join("") || "?";
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  MEDIA — 4K cascade with quality badge
-  // ══════════════════════════════════════════════════════════════════════════
-  var QUALITY_LEVELS = [
-    {
-      label: "4K", badge: "4K",
-      video: {
-        width:     { ideal: 3840, max: 3840 },
-        height:    { ideal: 2160, max: 2160 },
-        frameRate: { ideal: 30,  max: 60   },
-        facingMode: "user",
-      },
-    },
-    {
-      label: "1080p", badge: "1080p",
-      video: {
-        width:     { ideal: 1920 },
-        height:    { ideal: 1080 },
-        frameRate: { ideal: 30 },
-        facingMode: "user",
-      },
-    },
-    {
-      label: "720p", badge: "HD",
-      video: {
-        width:     { ideal: 1280 },
-        height:    { ideal: 720 },
-        frameRate: { ideal: 30 },
-        facingMode: "user",
-      },
-    },
-    {
-      label: "480p", badge: "SD",
-      video: { width: { ideal: 854 }, height: { ideal: 480 }, facingMode: "user" },
-    },
-    {
-      label: "audio-only", badge: "🎙",
-      video: false,
-    },
+// ─────────────────────────────────────────────────────────
+// CAMERA / MIC
+// ─────────────────────────────────────────────────────────
+async function openCamera() {
+  // Try ideal 4K → fallback to lower
+  const attempts = [
+    { video: { width:{ideal:3840}, height:{ideal:2160}, frameRate:{ideal:30}, facingMode:"user" }, audio: audioConstraints() },
+    { video: { width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30}, facingMode:"user" }, audio: audioConstraints() },
+    { video: { facingMode: "user" }, audio: audioConstraints() },
+    { video: true, audio: audioConstraints() },
+    { video: false, audio: audioConstraints() },
   ];
-
-  var AUDIO_CONSTRAINTS = {
-    echoCancellation:  true,
-    noiseSuppression:  true,
-    autoGainControl:   true,
-    sampleRate:        48000,
-    channelCount:      1,
-  };
-
-  function startMedia(idx) {
-    idx = idx || 0;
-    if (idx >= QUALITY_LEVELS.length) {
-      toast("No camera/mic found — joining as viewer", "warn");
-      localStream = new MediaStream();
-      addTile(localStream, socket.id, true, ME, false, false);
-      socket.emit("join-room", { roomId: ROOM, name: ME });
-      return;
-    }
-    var q = QUALITY_LEVELS[idx];
-    navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: q.video })
-      .then(function (stream) {
-        localStream   = stream;
-        acquiredQuality = q.badge;
-        qualityBadge.textContent = q.badge;
-        qualityBadge.className   = "badge-quality q-" + q.label.replace(/\s/g,"");
-        var hasVideo = stream.getVideoTracks().length > 0;
-        if (idx < 2) toast("Camera quality: " + q.label + " 🎥", "success", 2000);
-        addTile(stream, socket.id, true, ME, true, hasVideo);
-        setupAnalyser(stream, socket.id, true);
-        socket.emit("join-room", { roomId: ROOM, name: ME });
-        // Try to upgrade to 4K silently after connecting
-        if (idx > 0) tryUpgrade();
-      })
-      .catch(function (err) {
-        console.warn("Quality " + q.label + " failed:", err.name);
-        startMedia(idx + 1);
-      });
-  }
-
-  // Try to upgrade to 4K after initial connection (background attempt)
-  function tryUpgrade() {
-    var best = QUALITY_LEVELS[0];
-    navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: best.video })
-      .then(function (newStream) {
-        // Swap local tile video source
-        var tile = document.getElementById("tile-" + socket.id);
-        if (tile && tile._video) {
-          tile._video.srcObject = newStream;
-        }
-        // Replace tracks in all peers
-        var newVideoTrack = newStream.getVideoTracks()[0];
-        var newAudioTrack = newStream.getAudioTracks()[0];
-        Object.values(peers).forEach(function (pc) {
-          pc.getSenders().forEach(function (sender) {
-            if (sender.track) {
-              if (sender.track.kind === "video" && newVideoTrack)
-                sender.replaceTrack(newVideoTrack).catch(function () {});
-              if (sender.track.kind === "audio" && newAudioTrack)
-                sender.replaceTrack(newAudioTrack).catch(function () {});
-            }
-          });
-        });
-        // Stop old tracks
-        localStream.getTracks().forEach(function (t) { t.stop(); });
-        localStream = newStream;
-        acquiredQuality = best.badge;
-        qualityBadge.textContent = best.badge;
-        qualityBadge.className   = "badge-quality q-4K";
-        setupAnalyser(newStream, socket.id, true);
-        toast("Upgraded to 4K! 🚀", "success", 2000);
-      })
-      .catch(function () { /* silently ignore upgrade failure */ });
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  AUDIO ANALYSER — real-time speaking detection
-  // ══════════════════════════════════════════════════════════════════════════
-  function setupAnalyser(stream, id, isLocal) {
-    teardownAnalyser(id);
-    if (!stream.getAudioTracks().length) return;
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
+  for (const c of attempts) {
     try {
-      var ctx      = new AC();
-      var src      = ctx.createMediaStreamSource(stream);
-      var analyser = ctx.createAnalyser();
-      analyser.fftSize              = 256;
-      analyser.smoothingTimeConstant = 0.85;
-      src.connect(analyser);
-      var buf  = new Uint8Array(analyser.frequencyBinCount);
-      var prev = false;
-
-      var iv = setInterval(function () {
-        analyser.getByteFrequencyData(buf);
-        var sum = 0;
-        for (var i = 0; i < buf.length; i++) sum += buf[i];
-        var isSpeaking = (sum / buf.length) > 8;
-
-        // Update tile
-        var tile = document.getElementById("tile-" + id);
-        if (tile) tile.classList.toggle("speaking", isSpeaking);
-        // Update thumb
-        var thumb = thumbStrip.querySelector("[data-id='" + id + "']");
-        if (thumb) thumb.classList.toggle("tsp", isSpeaking);
-
-        if (isSpeaking !== prev) {
-          prev = isSpeaking;
-          if (isLocal) socket.emit("speaking", { roomId: ROOM, isSpeaking: isSpeaking });
-          if (isSpeaking && !pinnedId) {
-            activeSpeaker = id;
-            applyProminence();
-            clearTimeout(speakerTimer);
-            speakerTimer = setTimeout(function () {
-              if (!pinnedId) { activeSpeaker = null; applyProminence(); }
-            }, 2500);
-          }
-        }
-      }, 150);
-
-      analysers[id] = { ctx: ctx, interval: iv };
-    } catch (e) { console.warn("Analyser failed:", e); }
-  }
-
-  function teardownAnalyser(id) {
-    var a = analysers[id];
-    if (!a) return;
-    clearInterval(a.interval);
-    try { a.ctx.close(); } catch (_) {}
-    delete analysers[id];
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  GRID LAYOUT
-  // ══════════════════════════════════════════════════════════════════════════
-  function updateGrid() {
-    var tiles = videoGrid.querySelectorAll(".vtile");
-    var n = tiles.length;
-
-    if (pinnedId) {
-      videoGrid.className = "video-grid grid-pinned";
-      tiles.forEach(function (t) {
-        t.style.display = (t.id === "tile-" + pinnedId) ? "" : "none";
-      });
+      localStream = await navigator.mediaDevices.getUserMedia(c);
+      showQuality(localStream);
+      addTile(localStream, socket.id, true, ME);
+      startSpeakDetect(localStream);
       return;
-    }
-
-    tiles.forEach(function (t) { t.style.display = ""; });
-    var cls = n <= 1 ? "grid-1"
-            : n === 2 ? "grid-2"
-            : n <= 4 ? "grid-4"
-            : n <= 6 ? "grid-6"
-            : "grid-many";
-    videoGrid.className = "video-grid " + cls;
-    applyProminence();
+    } catch (_) {}
   }
+  // Complete fallback: empty stream
+  localStream = new MediaStream();
+  addTile(localStream, socket.id, true, ME, false, false);
+  toast("Camera/mic unavailable — you are listen-only", "err");
+}
 
-  function applyProminence() {
-    videoGrid.querySelectorAll(".vtile").forEach(function (t) {
-      t.classList.remove("prominent");
-    });
-    if (activeSpeaker && !pinnedId) {
-      var sp = document.getElementById("tile-" + activeSpeaker);
-      if (sp) sp.classList.add("prominent");
-    }
-  }
+function audioConstraints() {
+  return { echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000 };
+}
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  THUMBNAIL STRIP
-  // ══════════════════════════════════════════════════════════════════════════
-  function rebuildThumbs() {
-    thumbStrip.innerHTML = "";
-    if (!pinnedId) { thumbStrip.style.display = "none"; return; }
-    thumbStrip.style.display = "flex";
+function showQuality(stream) {
+  const vt = stream.getVideoTracks()[0];
+  if (!vt) return;
+  const s = vt.getSettings();
+  const w = s.width || 0, h = s.height || 0;
+  let label = "HD", cls = "fhd";
+  if (w >= 3840 || h >= 2160)      { label = "4K";    cls = "uhd";   }
+  else if (w >= 1920 || h >= 1080) { label = "1080p"; cls = "fhd";   }
+  else if (w >= 1280 || h >= 720)  { label = "720p";  cls = "hd720"; }
+  else                              { label = "SD";    cls = "sd";    }
+  qualBadge.textContent = label;
+  qualBadge.className   = `qual-badge ${cls}`;
+}
 
-    videoGrid.querySelectorAll(".vtile").forEach(function (tile) {
-      var tid  = tile.id.replace("tile-", "");
-      var name = peerNames[tid] || tid.slice(0, 8);
-      var srcObj = tile._video ? tile._video.srcObject : null;
+// ─────────────────────────────────────────────────────────
+// SPEAKING DETECTION  (AudioAnalyser on local mic)
+// ─────────────────────────────────────────────────────────
+function startSpeakDetect(stream) {
+  try {
+    const ac  = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ac.createMediaStreamSource(stream);
+    const an  = ac.createAnalyser();
+    an.fftSize = 512; an.smoothingTimeConstant = 0.7;
+    src.connect(an);
+    const buf = new Uint8Array(an.frequencyBinCount);
+    let wasSpeaking = false, debounce = null;
 
-      var th = document.createElement("div");
-      th.className = "thumb";
-      th.dataset.id = tid;
-      if (tid === pinnedId)      th.classList.add("thumb-pinned");
-      if (tid === activeSpeaker) th.classList.add("tsp");
+    (function tick() {
+      an.getByteFrequencyData(buf);
+      const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
+      const now = avg > 14;
 
-      var tv = document.createElement("video");
-      tv.autoplay   = true;
-      tv.playsInline = true;
-      tv.muted      = (tid === socket.id);
-      if (srcObj) tv.srcObject = srcObj;
-      th.appendChild(tv);
-
-      var tn = document.createElement("div");
-      tn.className   = "thumb-name";
-      tn.textContent = (tid === socket.id) ? "You" : name;
-      th.appendChild(tn);
-
-      th.addEventListener("click", function () { setPin(tid); });
-      thumbStrip.appendChild(th);
-    });
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  PIN
-  // ══════════════════════════════════════════════════════════════════════════
-  function setPin(id) {
-    var wasMe = (pinnedId === id);
-
-    // Clear old pin UI
-    if (pinnedId) {
-      var prev = document.getElementById("tile-" + pinnedId);
-      if (prev) {
-        prev.classList.remove("pinned");
-        var pt = prev.querySelector(".pin-tag");
-        if (pt) pt.remove();
+      if (now && !wasSpeaking) {
+        clearTimeout(debounce);
+        wasSpeaking = true;
+        markSpeaking(socket.id, true);
+        socket.emit("speaking", { roomId: ROOM, on: true });
+      } else if (!now && wasSpeaking) {
+        debounce = setTimeout(() => {
+          wasSpeaking = false;
+          markSpeaking(socket.id, false);
+          socket.emit("speaking", { roomId: ROOM, on: false });
+        }, 700);
       }
-      pinnedId = null;
+      requestAnimationFrame(tick);
+    })();
+  } catch (_) {}
+}
+
+// ─────────────────────────────────────────────────────────
+// TILES
+// ─────────────────────────────────────────────────────────
+function mkInitials(name) {
+  return (name || "?").split(" ").slice(0, 2).map(w => w[0] || "").join("").toUpperCase() || "?";
+}
+
+function addTile(stream, id, isLocal, name, mic = true, cam = true) {
+  if (document.getElementById("t" + id)) return;
+  peerNames[id] = name;
+
+  const tile = document.createElement("div");
+  tile.className = "vt";
+  tile.id = "t" + id;
+  tile.dataset.name = name;
+
+  // video
+  const vid = document.createElement("video");
+  vid.srcObject   = stream;
+  vid.autoplay    = true;
+  vid.playsInline = true;
+  vid.muted       = isLocal;
+  tile.appendChild(vid);
+
+  // cam-off placeholder
+  const co = document.createElement("div");
+  co.className = "cam-off";
+  co.style.display = cam ? "none" : "flex";
+  const av = document.createElement("div");
+  av.className = "av";
+  av.textContent = mkInitials(name);
+  const avn = document.createElement("div");
+  avn.className = "av-name";
+  avn.textContent = name;
+  co.appendChild(av); co.appendChild(avn);
+  tile.appendChild(co);
+
+  // speaking ring
+  const ring = document.createElement("div");
+  ring.className = "speak-ring";
+  tile.appendChild(ring);
+
+  // bottom bar
+  const bar = document.createElement("div");
+  bar.className = "tile-bar";
+  const nameEl = document.createElement("span");
+  nameEl.className = "tile-name";
+  nameEl.textContent = isLocal ? "You" : name;
+  if (isLocal) {
+    const tag = document.createElement("span");
+    tag.className = "you-tag"; tag.textContent = "YOU";
+    nameEl.appendChild(tag);
+  }
+  const icons = document.createElement("div");
+  icons.className = "tile-icons";
+  const mi = document.createElement("span");
+  mi.className = "ticon" + (mic ? "" : " off");
+  mi.textContent = mic ? "🎤" : "🔇";
+  const ci = document.createElement("span");
+  ci.className = "ticon" + (cam ? "" : " off");
+  ci.textContent = cam ? "📷" : "🚫";
+  icons.appendChild(mi); icons.appendChild(ci);
+  bar.appendChild(nameEl); bar.appendChild(icons);
+  tile.appendChild(bar);
+
+  // pin button
+  const pb = document.createElement("button");
+  pb.className = "pin-btn"; pb.textContent = "📌";
+  pb.title = "Pin this tile";
+  pb.addEventListener("click", e => { e.stopPropagation(); togglePin(id); });
+  tile.appendChild(pb);
+
+  // double-tap → pin (mobile)
+  let lastTap = 0;
+  tile.addEventListener("touchend", e => {
+    const now = Date.now();
+    if (now - lastTap < 320) { e.preventDefault(); togglePin(id); }
+    lastTap = now;
+  }, { passive: false });
+  // double-click → pin (desktop)
+  tile.addEventListener("dblclick", () => togglePin(id));
+
+  // internal refs
+  tile._vid = vid;
+  tile._co  = co;
+  tile._mi  = mi;
+  tile._ci  = ci;
+
+  grid.appendChild(tile);
+  relayout();
+}
+
+function removeTile(id) {
+  const el = document.getElementById("t" + id);
+  if (el) el.remove();
+  delete peerNames[id];
+  if (pinnedId === id) applyPin(null, false);
+  if (speakerId === id) { speakerId = null; grid.classList.remove("spotlight-mode"); }
+  relayout();
+}
+
+// ── Tile media state ───────────────────────────────────────
+function setTileMedia(id, mic, cam) {
+  const tile = document.getElementById("t" + id);
+  if (!tile) return;
+  tile._mi.textContent = mic ? "🎤" : "🔇";
+  tile._mi.className   = "ticon" + (mic ? "" : " off");
+  tile._ci.textContent = cam ? "📷" : "🚫";
+  tile._ci.className   = "ticon" + (cam ? "" : " off");
+  tile._co.style.display = cam ? "none" : "flex";
+}
+
+// ── Speaking ───────────────────────────────────────────────
+function markSpeaking(id, on) {
+  const tile = document.getElementById("t" + id);
+  if (!tile) return;
+
+  if (on) {
+    tile.classList.add("speaking");
+    speakerId = id;
+    if (!pinnedId) promoteToTop(id);
+  } else {
+    tile.classList.remove("speaking");
+    if (speakerId === id) {
+      speakerId = null;
+      if (!pinnedId) demoteFromTop(id);
     }
+  }
+}
 
-    if (!wasMe) {
-      var tile = document.getElementById("tile-" + id);
-      if (!tile) return;
-      pinnedId = id;
-      tile.classList.add("pinned");
-      var nm = tile.querySelector(".vtile-name");
-      if (nm) {
-        var pt2 = document.createElement("span");
-        pt2.className   = "pin-tag";
-        pt2.textContent = "📌";
-        nm.appendChild(pt2);
-      }
-      toast("📌 " + (peerNames[id] || "Participant") + " pinned", "info", 1800);
+// ── Screen share tile ──────────────────────────────────────
+function markSharing(id, on) {
+  const tile = document.getElementById("t" + id);
+  if (!tile) return;
+
+  if (on) {
+    tile.classList.add("sharing");
+    // badge
+    if (!tile.querySelector(".share-badge")) {
+      const b = document.createElement("div");
+      b.className = "share-badge"; b.textContent = "📡 Sharing";
+      tile.appendChild(b);
     }
-
-    updateGrid();
-    rebuildThumbs();
+    if (!pinnedId) promoteToTop(id);
+  } else {
+    tile.classList.remove("sharing");
+    tile.querySelector(".share-badge")?.remove();
+    if (!pinnedId) demoteFromTop(id);
   }
+}
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  VIDEO TILES
-  // ══════════════════════════════════════════════════════════════════════════
-  function addTile(stream, id, isLocal, name, micOn, camOn) {
-    if (document.getElementById("tile-" + id)) return;
-    isLocal = !!isLocal;
-    name    = name || "";
-    micOn   = micOn !== false;
-    camOn   = camOn !== false;
-    peerNames[id] = name;
+// ── Spotlight: move one tile to "first" position ───────────
+// CSS order property: -1 = first, 0 = normal
+function promoteToTop(id) {
+  // Reset all
+  grid.querySelectorAll(".vt").forEach(t => t.style.order = "");
+  const tile = document.getElementById("t" + id);
+  if (tile) tile.style.order = "-1";
+  applySpotlightLayout(id);
+}
 
-    var tile = document.createElement("div");
-    tile.className   = "vtile";
-    tile.id          = "tile-" + id;
-    tile.dataset.name = name;
+function demoteFromTop(id) {
+  const tile = document.getElementById("t" + id);
+  if (tile) tile.style.order = "";
+  grid.classList.remove("spotlight-mode");
+}
 
-    // Video
-    var vid = document.createElement("video");
-    vid.autoplay    = true;
-    vid.playsInline  = true;
-    vid.muted       = isLocal;
-    vid.srcObject   = stream;
-    tile.appendChild(vid);
+function applySpotlightLayout(id) {
+  const n = grid.querySelectorAll(".vt").length;
+  if (n < 2) return; // no need for spotlight with 1 person
+  grid.classList.add("spotlight-mode");
 
-    // Cam-off avatar
-    var ava = document.createElement("div");
-    ava.className   = "tile-avatar";
-    ava.style.display = camOn ? "none" : "flex";
-    var av2 = document.createElement("div");
-    av2.className   = "avatar-ring";
-    av2.textContent = getInitials(name);
-    ava.appendChild(av2);
-    tile.appendChild(ava);
-
-    // Pin button overlay
-    var ovr = document.createElement("div");
-    ovr.className = "tile-overlay";
-    var pb = document.createElement("button");
-    pb.className   = "tile-pin-btn";
-    pb.title       = "Pin";
-    pb.textContent = "📌";
-    pb.addEventListener("click", function (e) { e.stopPropagation(); setPin(id); });
-    ovr.appendChild(pb);
-    tile.appendChild(ovr);
-
-    // Info bar
-    var bar = document.createElement("div");
-    bar.className = "tile-bar";
-
-    var nm = document.createElement("span");
-    nm.className   = "vtile-name";
-    nm.textContent = isLocal ? "You" : (name || id.slice(0, 8));
-    if (isLocal) {
-      var yt = document.createElement("span");
-      yt.className   = "you-tag";
-      yt.textContent = "YOU";
-      nm.appendChild(yt);
+  // Move all non-spotlight tiles into the strip
+  const strip = getOrCreateStrip();
+  grid.querySelectorAll(".vt").forEach(tile => {
+    const tId = tile.id.replace("t", "");
+    if (tId === id) {
+      tile.classList.add("vt-spotlight");
+      tile.classList.remove("vt-strip-item");
+      grid.insertBefore(tile, strip); // ensure it's before strip
+    } else {
+      tile.classList.remove("vt-spotlight");
+      tile.classList.add("vt-strip-item");
+      strip.appendChild(tile);
     }
+  });
+}
 
-    var icons = document.createElement("span");
-    icons.className = "tile-icons";
+function exitSpotlightLayout() {
+  const strip = document.getElementById("tile-strip");
+  if (strip) {
+    // Move all tiles back to grid
+    Array.from(strip.children).forEach(tile => {
+      tile.classList.remove("vt-strip-item");
+      grid.appendChild(tile);
+    });
+    strip.remove();
+  }
+  grid.querySelectorAll(".vt").forEach(t => {
+    t.classList.remove("vt-spotlight");
+    t.style.order = "";
+  });
+  grid.classList.remove("spotlight-mode");
+}
 
-    var mi = document.createElement("span");
-    mi.className   = "tile-icon" + (micOn ? "" : " off");
-    mi.textContent = micOn ? "🎤" : "🔇";
+function getOrCreateStrip() {
+  let strip = document.getElementById("tile-strip");
+  if (!strip) {
+    strip = document.createElement("div");
+    strip.id = "tile-strip";
+    strip.className = "vt-strip";
+    grid.appendChild(strip);
+  }
+  return strip;
+}
 
-    var ci = document.createElement("span");
-    ci.className   = "tile-icon" + (camOn ? "" : " off");
-    ci.textContent = camOn ? "📷" : "🚫";
+// ── Pin ────────────────────────────────────────────────────
+function togglePin(id) {
+  if (pinnedId === id) {
+    // unpin
+    socket.emit("unpin", { roomId: ROOM });
+    applyPin(null, true);
+  } else {
+    socket.emit("pin", { roomId: ROOM, peerId: id });
+    applyPin(id, true);
+  }
+}
 
-    icons.appendChild(mi);
-    icons.appendChild(ci);
-    bar.appendChild(nm);
-    bar.appendChild(icons);
-    tile.appendChild(bar);
+function applyPin(id, showToast) {
+  pinnedId = id;
 
-    tile._video   = vid;
-    tile._avatar  = ava;
-    tile._micIcon = mi;
-    tile._camIcon = ci;
+  // Exit spotlight mode first (pin takes over)
+  exitSpotlightLayout();
 
-    videoGrid.appendChild(tile);
-    updateGrid();
-    rebuildThumbs();
+  grid.querySelectorAll(".vt").forEach(tile => {
+    const tid = tile.id.replace("t", "");
+    const isPin = tid === id;
+    tile.classList.toggle("pinned", isPin);
+    const pb = tile.querySelector(".pin-btn");
+    if (pb) {
+      pb.title    = isPin ? "Unpin" : "Pin this tile";
+      pb.textContent = isPin ? "📍" : "📌";
+    }
+    tile.style.order = isPin ? "-1" : "";
+  });
+
+  if (id) {
+    applySpotlightLayout(id);
+    if (showToast) toast(`📌 Pinned ${id === socket.id ? "your" : (peerNames[id]||"their")} tile`);
+  } else {
+    if (showToast) toast("Unpinned");
+    relayout();
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// GRID LAYOUT (data-n drives CSS)
+// ─────────────────────────────────────────────────────────
+function relayout() {
+  const tiles = grid.querySelectorAll(".vt");
+  const n     = tiles.length;
+  grid.dataset.n = Math.min(n, 9);
+  pCount.textContent = n;
+}
+
+// ─────────────────────────────────────────────────────────
+// PEER CONNECTIONS
+// ─────────────────────────────────────────────────────────
+function createPeer(id, initiator, remoteName) {
+  if (peers[id]) { try { peers[id].close(); } catch (_) {} }
+
+  const pc = new RTCPeerConnection(ICE);
+  peers[id] = pc;
+  peerNames[id] = remoteName || "Peer";
+
+  // Add local tracks to peer
+  if (localStream) {
+    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
   }
 
-  function removeTile(id) {
-    var el = document.getElementById("tile-" + id);
-    if (!el) return;
-    el.remove();
-    teardownAnalyser(id);
-    delete peerNames[id];
-    if (pinnedId === id)      pinnedId = null;
-    if (activeSpeaker === id) activeSpeaker = null;
-    updateGrid();
-    rebuildThumbs();
-  }
-
-  function updateTileMedia(id, micOn, camOn) {
-    var tile = document.getElementById("tile-" + id);
-    if (!tile) return;
-    if (tile._micIcon) { tile._micIcon.textContent = micOn ? "🎤" : "🔇"; tile._micIcon.className = "tile-icon" + (micOn ? "" : " off"); }
-    if (tile._camIcon) { tile._camIcon.textContent = camOn ? "📷" : "🚫"; tile._camIcon.className = "tile-icon" + (camOn ? "" : " off"); }
-    if (tile._avatar)  { tile._avatar.style.display = camOn ? "none" : "flex"; }
-  }
-
-  function syncLocalIcons() {
-    updateTileMedia(socket.id, isMicOn, isCamOn);
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  WebRTC PEERS — 4K bandwidth + simulcast
-  // ══════════════════════════════════════════════════════════════════════════
-  var ICE = {
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302"  },
-      { urls: "stun:stun1.l.google.com:19302" },
-      { urls: "stun:stun2.l.google.com:19302" },
-      { urls: "stun:stun.cloudflare.com:3478"  },
-      // Production: add TURN here
-      // { urls: "turn:your-server:3478", username: "u", credential: "p" }
-    ],
-    bundlePolicy:  "max-bundle",
-    rtcpMuxPolicy: "require",
-    sdpSemantics:  "unified-plan",
+  // Prefer high bitrate for video
+  pc.onnegotiationneeded = () => {
+    pc.getSenders().forEach(sender => {
+      if (sender.track?.kind !== "video") return;
+      try {
+        const p = sender.getParameters();
+        if (!p.encodings?.length) p.encodings = [{}];
+        p.encodings.forEach(enc => {
+          enc.maxBitrate   = 8_000_000; // 8 Mbps for 4K
+          enc.maxFramerate = 30;
+          enc.scaleResolutionDownBy = 1;
+        });
+        sender.setParameters(p).catch(() => {});
+      } catch (_) {}
+    });
   };
 
-  // SDP modifier: inject max bitrate for 4K (b=AS line)
-  function boostSDP(sdp) {
-    // Set video bandwidth to 20 Mbps for 4K
-    return sdp.replace(
-      /m=video (\d+) /g,
-      function (match) {
-        return match;
-      }
-    ).replace(
-      /(m=video[^\n]*\n)/g,
-      "$1b=AS:20000\n"
-    );
-  }
-
-  function createPeer(id, initiator, remoteName) {
-    if (peers[id]) { peers[id].close(); }
-
-    var pc = new RTCPeerConnection(ICE);
-    peers[id]     = pc;
-    peerNames[id] = remoteName;
-
-    // Add local tracks with simulcast encoding for 4K
-    if (localStream) {
-      localStream.getTracks().forEach(function (track) {
-        if (track.kind === "video") {
-          // Simulcast: 3 layers — quarter, half, full
-          pc.addTransceiver(track, {
-            streams: [localStream],
-            sendEncodings: [
-              { rid: "q", scaleResolutionDownBy: 4, maxBitrate: 500_000  },
-              { rid: "h", scaleResolutionDownBy: 2, maxBitrate: 2_000_000 },
-              { rid: "f", scaleResolutionDownBy: 1, maxBitrate: 20_000_000 },
-            ],
-          });
-        } else {
-          pc.addTrack(track, localStream);
-        }
-      });
+  // Remote track → update tile video
+  pc.ontrack = e => {
+    const stream = e.streams[0];
+    if (!stream) return;
+    const tile = document.getElementById("t" + id);
+    if (tile) {
+      tile._vid.srcObject = stream;
+    } else {
+      addTile(stream, id, false, remoteName || "Peer");
     }
+  };
 
-    // Remote track
-    pc.ontrack = function (e) {
-      var rs   = e.streams[0];
-      var tile = document.getElementById("tile-" + id);
-      if (tile) {
-        tile._video.srcObject = rs;
-      } else {
-        addTile(rs, id, false, remoteName || "Peer", true, true);
-      }
-      if (e.track.kind === "audio") {
-        teardownAnalyser(id);
-        setTimeout(function () { setupAnalyser(rs, id, false); }, 500);
-      }
-    };
+  // ICE
+  pc.onicecandidate = e => {
+    if (e.candidate) socket.emit("signal", { to: id, data: { candidate: e.candidate } });
+  };
 
-    // ICE
-    pc.onicecandidate = function (e) {
-      if (e.candidate) socket.emit("signal", { to: id, data: { candidate: e.candidate } });
-    };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "failed") {
+      try { pc.restartIce(); } catch (_) {}
+    }
+  };
 
-    pc.onconnectionstatechange = function () {
-      var s = pc.connectionState;
-      if (s === "connected")    { applyMaxBitrate(pc); }
-      if (s === "failed")       { handlePeerFailed(id, initiator); }
-    };
-
-    if (initiator) doOffer(pc, id);
-    return pc;
-  }
-
-  function doOffer(pc, id) {
+  if (initiator) {
     pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
-      .then(function (offer) {
-        offer.sdp = boostSDP(offer.sdp);
-        return pc.setLocalDescription(offer);
-      })
-      .then(function () {
-        socket.emit("signal", { to: id, data: { sdp: pc.localDescription } });
-      })
-      .catch(console.error);
+      .then(o => pc.setLocalDescription(o))
+      .then(() => socket.emit("signal", { to: id, data: { sdp: pc.localDescription } }))
+      .catch(console.warn);
   }
 
-  function handlePeerFailed(id, initiator) {
-    toast("Connection issue with " + (peerNames[id] || "peer") + " — reconnecting…", "warn");
-    if (initiator && peers[id]) {
-      peers[id].restartIce();
-      peers[id].createOffer({ iceRestart: true, offerToReceiveAudio: true, offerToReceiveVideo: true })
-        .then(function (o) { o.sdp = boostSDP(o.sdp); return peers[id].setLocalDescription(o); })
-        .then(function () { socket.emit("signal", { to: id, data: { sdp: peers[id].localDescription } }); })
-        .catch(console.error);
-    }
-  }
+  return pc;
+}
 
-  // Force maximum bitrate on all video senders after connection
-  function applyMaxBitrate(pc) {
-    pc.getSenders().forEach(function (sender) {
-      if (!sender.track || sender.track.kind !== "video") return;
-      var params = sender.getParameters();
-      if (!params.encodings || !params.encodings.length) {
-        params.encodings = [{}];
-      }
-      params.encodings.forEach(function (enc) {
-        enc.maxBitrate   = 20_000_000; // 20 Mbps per encoding layer
-        enc.maxFramerate = 60;
-        if (!enc.rid) enc.scaleResolutionDownBy = 1; // full res for non-simulcast
-      });
-      sender.setParameters(params).catch(function () {});
-    });
-  }
+// ─────────────────────────────────────────────────────────
+// SOCKET EVENTS
+// ─────────────────────────────────────────────────────────
+socket.on("connect", () => console.log("socket", socket.id));
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  SOCKET EVENTS
-  // ══════════════════════════════════════════════════════════════════════════
-  socket.on("connect", function () { console.log("Socket:", socket.id); });
-
-  socket.on("all-users", function (users) {
-    users.forEach(function (u) {
-      addTile(new MediaStream(), u.id, false, u.name, true, true);
-      createPeer(u.id, true, u.name);
-    });
+socket.on("all-users", users => {
+  users.forEach(u => {
+    addTile(new MediaStream(), u.id, false, u.name);
+    createPeer(u.id, true, u.name);
   });
+});
 
-  socket.on("user-joined", function (u) {
-    toast(u.name + " joined", "success");
-    addTile(new MediaStream(), u.id, false, u.name, true, true);
-    createPeer(u.id, false, u.name);
-  });
+socket.on("user-joined", u => {
+  toast(`👋 ${u.name} joined`);
+  addTile(new MediaStream(), u.id, false, u.name);
+  createPeer(u.id, false, u.name);
+});
 
-  socket.on("signal", function (payload) {
-    var from = payload.from, data = payload.data;
-    var pc   = peers[from];
-    if (!pc) {
-      var t = document.getElementById("tile-" + from);
-      pc = createPeer(from, false, t ? t.dataset.name : "Peer");
-    }
-
-    var p = Promise.resolve();
+socket.on("signal", async ({ from, data }) => {
+  if (!peers[from]) createPeer(from, false, peerNames[from]);
+  const pc = peers[from];
+  try {
     if (data.sdp) {
-      p = pc.setRemoteDescription(new RTCSessionDescription(data.sdp))
-        .then(function () {
-          if (data.sdp.type === "offer") {
-            return pc.createAnswer()
-              .then(function (ans) { ans.sdp = boostSDP(ans.sdp); return pc.setLocalDescription(ans); })
-              .then(function () { socket.emit("signal", { to: from, data: { sdp: pc.localDescription } }); });
-          }
-        });
+      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      if (data.sdp.type === "offer") {
+        const ans = await pc.createAnswer();
+        await pc.setLocalDescription(ans);
+        socket.emit("signal", { to: from, data: { sdp: pc.localDescription } });
+      }
     }
     if (data.candidate) {
-      p = p.then(function () {
-        return pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-      });
+      await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
     }
-    p.catch(function (e) { console.error("Signal:", e); });
-  });
+  } catch (e) { console.warn("signal:", e.message); }
+});
 
-  socket.on("user-left", function (id) {
-    var tile = document.getElementById("tile-" + id);
-    toast((tile ? tile.dataset.name : "Someone") + " left");
-    if (peers[id]) { peers[id].close(); delete peers[id]; }
-    removeTile(id);
-  });
+socket.on("user-left", id => {
+  toast(`${peerNames[id] || "Someone"} left`);
+  peers[id]?.close();
+  delete peers[id];
+  removeTile(id);
+});
 
-  socket.on("participant-count", function (n) { countEl.textContent = n; });
+socket.on("room-count", n => { pCount.textContent = n; });
 
-  socket.on("peer-media-state", function (d) { updateTileMedia(d.id, d.micOn, d.camOn); });
+socket.on("peer-state", ({ id, mic, cam }) => setTileMedia(id, mic, cam));
 
-  socket.on("peer-raised-hand", function (d) {
-    toast("✋ " + d.name + " raised their hand", "info");
-    var tile = document.getElementById("tile-" + d.id);
-    if (tile && !tile.querySelector(".hand-badge")) {
-      var hb = document.createElement("div");
-      hb.className   = "hand-badge";
-      hb.textContent = "✋ Hand raised";
-      tile.appendChild(hb);
-      setTimeout(function () { hb.remove(); }, 8000);
+socket.on("peer-speaking", ({ id, on }) => markSpeaking(id, on));
+
+socket.on("peer-screen-on",  ({ id, name }) => {
+  markSharing(id, true);
+  toast(`🖥️ ${name || "Someone"} is sharing their screen`);
+});
+socket.on("peer-screen-off", ({ id }) => markSharing(id, false));
+
+socket.on("peer-hand", ({ id, name }) => {
+  toast(`✋ ${name || "Someone"} raised their hand`);
+  const tile = document.getElementById("t" + id);
+  if (tile && !tile.querySelector(".hand-badge")) {
+    const b = document.createElement("div");
+    b.className = "hand-badge"; b.innerHTML = "✋ Hand raised";
+    tile.appendChild(b);
+    setTimeout(() => b.remove(), 9000);
+  }
+});
+
+socket.on("do-pin",   ({ peerId }) => applyPin(peerId, false));
+socket.on("do-unpin", ()           => applyPin(null,   false));
+
+socket.on("chat-msg", ({ name, message, ts }) => {
+  appendMsg(name, message, false, ts);
+  if (!chatOpen) {
+    unreadCount++;
+    unread.textContent = unreadCount;
+    unread.classList.remove("hidden");
+  }
+});
+
+socket.on("disconnect", () => toast("Disconnected from server", "err"));
+
+// ─────────────────────────────────────────────────────────
+// CHAT
+// ─────────────────────────────────────────────────────────
+function appendMsg(name, message, isMe, ts) {
+  if (name === null || name === undefined) {
+    const el = document.createElement("div");
+    el.className = "csys"; el.textContent = message;
+    chatLog.appendChild(el);
+  } else {
+    const wrap = document.createElement("div");
+    wrap.className = `cmsg ${isMe ? "me" : "them"}`;
+    if (!isMe) {
+      const s = document.createElement("span");
+      s.className = "cm-sender"; s.textContent = name;
+      wrap.appendChild(s);
     }
-  });
-
-  socket.on("peer-speaking", function (d) {
-    var tile  = document.getElementById("tile-" + d.id);
-    if (tile)  tile.classList.toggle("speaking", d.isSpeaking);
-    var thumb = thumbStrip.querySelector("[data-id='" + d.id + "']");
-    if (thumb) thumb.classList.toggle("tsp", d.isSpeaking);
-    if (d.isSpeaking && !pinnedId) {
-      activeSpeaker = d.id;
-      applyProminence();
-      clearTimeout(speakerTimer);
-      speakerTimer = setTimeout(function () {
-        if (!pinnedId) { activeSpeaker = null; applyProminence(); }
-      }, 2500);
-    }
-  });
-
-  socket.on("peer-screen-share", function (d) {
-    var tile = document.getElementById("tile-" + d.id);
-    if (tile) tile.classList.toggle("sharing", d.isSharing);
-    if (d.isSharing) {
-      toast("🖥️ " + d.name + " is sharing screen", "info");
-      if (!pinnedId) setPin(d.id);
-    } else {
-      toast("🖥️ " + d.name + " stopped sharing", "info");
-      if (pinnedId === d.id) setPin(d.id); // unpin
-    }
-  });
-
-  socket.on("peer-mobile-cam-share", function (d) {
-    var tile = document.getElementById("tile-" + d.id);
-    if (tile) tile.classList.toggle("sharing", d.isSharing);
-    if (d.isSharing) {
-      toast("📷 " + d.name + " is sharing via camera", "info");
-      if (!pinnedId) setPin(d.id);
-    } else {
-      toast("📷 " + d.name + " stopped camera share", "info");
-      if (pinnedId === d.id) setPin(d.id);
-    }
-  });
-
-  socket.on("chat-message", function (m) {
-    appendChat(m.sender, m.message, false, m.ts);
-    if (!isChatOpen) {
-      unread++;
-      chatBadge.textContent   = unread > 9 ? "9+" : unread;
-      chatBadge.style.display = "";
-    }
-  });
-
-  socket.on("disconnect", function () { toast("Disconnected from server", "error"); });
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  CHAT
-  // ══════════════════════════════════════════════════════════════════════════
-  function appendChat(sender, message, isSelf, ts) {
-    if (!sender) {
-      var sys = document.createElement("div");
-      sys.className   = "chat-sys";
-      sys.textContent = message;
-      chatMsgs.appendChild(sys);
-      chatMsgs.scrollTop = chatMsgs.scrollHeight;
-      return;
-    }
-    var wrap = document.createElement("div");
-    wrap.className = "chat-msg " + (isSelf ? "self" : "other");
-    if (!isSelf) {
-      var sn = document.createElement("div");
-      sn.className   = "chat-sender";
-      sn.textContent = sender;
-      wrap.appendChild(sn);
-    }
-    var bubble = document.createElement("div");
-    bubble.className   = "chat-bubble";
-    bubble.textContent = message;
-    wrap.appendChild(bubble);
-    var t = document.createElement("div");
-    t.className   = "chat-ts";
-    t.textContent = new Date(ts || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const b = document.createElement("div");
+    b.className = "cm-bubble"; b.textContent = message;
+    wrap.appendChild(b);
+    const t = document.createElement("span");
+    t.className = "cm-time";
+    t.textContent = ts ? new Date(ts).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }) : "";
     wrap.appendChild(t);
-    chatMsgs.appendChild(wrap);
-    chatMsgs.scrollTop = chatMsgs.scrollHeight;
+    chatLog.appendChild(wrap);
   }
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
 
-  function sendChat() {
-    var msg = chatInput.value.trim();
-    if (!msg) return;
-    var ts = Date.now();
-    socket.emit("chat-message", { roomId: ROOM, sender: ME, message: msg, ts: ts });
-    appendChat(ME, msg, true, ts);
-    chatInput.value = "";
+function sysMsg(text) { appendMsg(null, text, false); }
+
+function sendChat() {
+  const msg = chatInput.value.trim();
+  if (!msg) return;
+  socket.emit("chat-msg", { roomId: ROOM, message: msg });
+  appendMsg(ME, msg, true, Date.now());
+  chatInput.value = "";
+}
+btnSend.addEventListener("click", sendChat);
+chatInput.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+
+// ─────────────────────────────────────────────────────────
+// CONTROLS
+// ─────────────────────────────────────────────────────────
+
+// Mic toggle
+btnMic.addEventListener("click", () => {
+  micOn = !micOn;
+  localStream?.getAudioTracks().forEach(t => t.enabled = micOn);
+  btnMic.classList.toggle("active", micOn);
+  btnMic.classList.toggle("off",    !micOn);
+  btnMic.querySelector(".cb-lbl").textContent = micOn ? "Mute" : "Unmute";
+  socket.emit("media-state", { roomId: ROOM, mic: micOn, cam: camOn });
+  setTileMedia(socket.id, micOn, camOn);
+});
+
+// Camera toggle
+btnCam.addEventListener("click", () => {
+  camOn = !camOn;
+  localStream?.getVideoTracks().forEach(t => t.enabled = camOn);
+  btnCam.classList.toggle("active", camOn);
+  btnCam.classList.toggle("off",    !camOn);
+  btnCam.querySelector(".cb-lbl").textContent = camOn ? "Camera" : "Cam Off";
+  socket.emit("media-state", { roomId: ROOM, mic: micOn, cam: camOn });
+  setTileMedia(socket.id, micOn, camOn);
+});
+
+// ── Screen share / Phone share ─────────────────────────────
+btnShare.addEventListener("click", () => sharing ? stopShare() : startShare());
+
+async function startShare() {
+  if (isMobile) {
+    await startMobileShare();
+  } else {
+    await startDesktopShare();
   }
-  chatSend.addEventListener("click", sendChat);
-  chatInput.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
-  });
+}
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  CONTROLS
-  // ══════════════════════════════════════════════════════════════════════════
-
-  // Mic
-  micBtn.addEventListener("click", function () {
-    isMicOn = !isMicOn;
-    if (localStream) localStream.getAudioTracks().forEach(function (t) { t.enabled = isMicOn; });
-    micBtn.classList.toggle("active", isMicOn);
-    micBtn.classList.toggle("muted",  !isMicOn);
-    micBtn.querySelector(".ctrl-lbl").textContent = isMicOn ? "Mute" : "Unmute";
-    syncLocalIcons();
-    socket.emit("media-state", { roomId: ROOM, micOn: isMicOn, camOn: isCamOn });
-  });
-
-  // Camera
-  camBtn.addEventListener("click", function () {
-    isCamOn = !isCamOn;
-    if (localStream) localStream.getVideoTracks().forEach(function (t) { t.enabled = isCamOn; });
-    camBtn.classList.toggle("active", isCamOn);
-    camBtn.classList.toggle("muted",  !isCamOn);
-    camBtn.querySelector(".ctrl-lbl").textContent = isCamOn ? "Camera" : "Cam Off";
-    syncLocalIcons();
-    socket.emit("media-state", { roomId: ROOM, micOn: isMicOn, camOn: isCamOn });
-  });
-
-  // Chat open/close
-  chatBtn.addEventListener("click", function () { isChatOpen ? closeChat() : openChat(); });
-  chatClose.addEventListener("click", closeChat);
-
-  function openChat() {
-    chatPanel.style.display = "flex";
-    isChatOpen              = true;
-    unread                  = 0;
-    chatBadge.style.display = "none";
-    chatBtn.classList.add("active");
-    setTimeout(function () { chatInput.focus(); }, 200);
-  }
-  function closeChat() {
-    chatPanel.style.display = "none";
-    isChatOpen              = false;
-    chatBtn.classList.remove("active");
-  }
-
-  // Raise hand
-  handBtn.addEventListener("click", function () {
-    isHandRaised = !isHandRaised;
-    handBtn.classList.toggle("hand-on", isHandRaised);
-    handBtn.querySelector(".ctrl-lbl").textContent = isHandRaised ? "Lower" : "Hand";
-    if (isHandRaised) {
-      socket.emit("raise-hand", { roomId: ROOM });
-      toast("You raised your hand ✋");
-      setTimeout(function () {
-        isHandRaised = false;
-        handBtn.classList.remove("hand-on");
-        handBtn.querySelector(".ctrl-lbl").textContent = "Hand";
-      }, 30000);
+// Desktop: getDisplayMedia
+async function startDesktopShare() {
+  try {
+    screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        width:     { ideal: 3840 },
+        height:    { ideal: 2160 },
+        frameRate: { ideal: 30, max: 60 },
+        cursor:    "always",
+      },
+      audio: { echoCancellation: false, noiseSuppression: false },
+    });
+    await applyScreenTrack(screenStream.getVideoTracks()[0]);
+    screenStream.getVideoTracks()[0].addEventListener("ended", stopShare);
+    toast("🖥️ Screen sharing started", "ok");
+  } catch (err) {
+    if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
+      toast("Screen share failed: " + err.message, "err");
     }
-  });
+    screenStream = null;
+  }
+}
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  SHARE — desktop screen capture OR mobile camera share
-  // ══════════════════════════════════════════════════════════════════════════
-  shareBtn.addEventListener("click", function () {
-    // If currently sharing anything, stop it
-    if (isDesktopShare || isMobileShare) {
-      stopAllSharing();
+// Mobile: no getDisplayMedia → use rear camera as "share"
+async function startMobileShare() {
+  // First try environment camera (rear)
+  const attempts = [
+    { video: { facingMode: { exact: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+    { video: { facingMode: "environment" }, audio: false },
+    { video: { facingMode: "user"        }, audio: false },
+    { video: true,                           audio: false },
+  ];
+
+  for (const c of attempts) {
+    try {
+      screenStream = await navigator.mediaDevices.getUserMedia(c);
+      await applyScreenTrack(screenStream.getVideoTracks()[0]);
+      toast("📸 Sharing camera (phone mode)", "ok");
       return;
-    }
-    openShareModal();
+    } catch (_) {}
+  }
+  toast("Camera share unavailable on this device", "err");
+  screenStream = null;
+}
+
+// Replace video track in all peer connections
+async function applyScreenTrack(track) {
+  const replaces = Object.values(peers).map(pc => {
+    const sender = pc.getSenders().find(s => s.track?.kind === "video");
+    return sender ? sender.replaceTrack(track).catch(() => {}) : Promise.resolve();
   });
+  await Promise.all(replaces);
 
-  shareModalClose.addEventListener("click", function () { shareModal.style.display = "none"; });
-  shareModal.addEventListener("click", function (e) {
-    if (e.target === shareModal) shareModal.style.display = "none";
-  });
+  // Update local tile preview
+  const tile = document.getElementById("t" + socket.id);
+  if (tile) tile._vid.srcObject = new MediaStream([track]);
 
-  function openShareModal() {
-    shareModal.style.display = "flex";
+  sharing = true;
+  btnShare.classList.add("sharing");
+  btnShare.querySelector(".cb-lbl").textContent = "Stop";
+  socket.emit("screen-on", { roomId: ROOM });
+  markSharing(socket.id, true);
+}
 
-    if (IS_MOBILE || !HAS_DISPLAY_MEDIA) {
-      // Mobile: show camera share option + limitation note
-      desktopShareOpt.style.display = "none";
-      mobileShareOpt.style.display  = "flex";
-      mobileLimitNote.style.display = "flex";
-    } else {
-      // Desktop: show both options
-      desktopShareOpt.style.display = "flex";
-      // Still offer mobile cam option on desktop (e.g. connected phone cam)
-      mobileShareOpt.style.display  = "flex";
-      mobileLimitNote.style.display = "none";
-    }
+async function stopShare() {
+  if (!screenStream) return;
+  screenStream.getTracks().forEach(t => t.stop());
+  screenStream = null;
+
+  // Restore camera track
+  const camTrack = localStream?.getVideoTracks()[0];
+  if (camTrack) {
+    const replaces = Object.values(peers).map(pc => {
+      const sender = pc.getSenders().find(s => s.track?.kind === "video");
+      return sender ? sender.replaceTrack(camTrack).catch(() => {}) : Promise.resolve();
+    });
+    await Promise.all(replaces);
   }
 
-  // ── Desktop screen share ───────────────────────────────────────────────────
-  startDesktopShare.addEventListener("click", function () {
-    shareModal.style.display = "none";
+  // Restore local tile
+  const tile = document.getElementById("t" + socket.id);
+  if (tile && localStream) tile._vid.srcObject = localStream;
 
-    navigator.mediaDevices.getDisplayMedia({
-      video: {
-        frameRate:   { ideal: 30 },
-        width:       { ideal: 1920 },
-        height:      { ideal: 1080 },
-        displaySurface: "monitor",
-      },
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-      },
-    })
-    .then(function (stream) {
-      shareStream      = stream;
-      isDesktopShare   = true;
-      var vTrack       = stream.getVideoTracks()[0];
+  sharing = false;
+  btnShare.classList.remove("sharing");
+  btnShare.querySelector(".cb-lbl").textContent = "Share";
+  socket.emit("screen-off", { roomId: ROOM });
+  markSharing(socket.id, false);
+  toast("🛑 Sharing stopped");
+}
 
-      // Replace video track in all peers
-      Object.values(peers).forEach(function (pc) {
-        var sender = pc.getSenders().find(function (s) { return s.track && s.track.kind === "video"; });
-        if (sender) sender.replaceTrack(vTrack).catch(console.error);
-      });
-
-      // Show on local tile
-      var tile = document.getElementById("tile-" + socket.id);
-      if (tile) { tile._video.srcObject = stream; tile.classList.add("sharing"); }
-
-      shareBtn.classList.add("sharing-on");
-      shareBtn.querySelector(".ctrl-lbl").textContent = "Stop";
-      socket.emit("screen-share-state", { roomId: ROOM, isSharing: true, mode: "desktop" });
-      toast("🖥️ Screen sharing started", "success");
-
-      vTrack.addEventListener("ended", stopAllSharing);
-    })
-    .catch(function (err) {
-      if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
-        toast("Screen share failed: " + err.message, "error");
+// Raise hand
+btnHand.addEventListener("click", () => {
+  handUp = !handUp;
+  btnHand.classList.toggle("hand-up", handUp);
+  btnHand.querySelector(".cb-lbl").textContent = handUp ? "Lower" : "Hand";
+  if (handUp) {
+    socket.emit("raise-hand", { roomId: ROOM });
+    toast("✋ Hand raised — visible to everyone");
+    setTimeout(() => {
+      if (handUp) {
+        handUp = false;
+        btnHand.classList.remove("hand-up");
+        btnHand.querySelector(".cb-lbl").textContent = "Hand";
       }
-    });
-  });
-
-  // ── Mobile camera share (document cam / rear camera) ──────────────────────
-  startMobileCamShare.addEventListener("click", function () {
-    shareModal.style.display = "none";
-
-    // Request rear/environment camera at high resolution
-    navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: "environment" }, // rear camera
-        width:      { ideal: 1920 },
-        height:     { ideal: 1080 },
-        frameRate:  { ideal: 30 },
-      },
-      audio: false,
-    })
-    .then(function (stream) {
-      shareStream    = stream;
-      isMobileShare  = true;
-      var vTrack     = stream.getVideoTracks()[0];
-
-      // Replace video track in all peers
-      Object.values(peers).forEach(function (pc) {
-        var sender = pc.getSenders().find(function (s) { return s.track && s.track.kind === "video"; });
-        if (sender) sender.replaceTrack(vTrack).catch(console.error);
-      });
-
-      // Show on local tile
-      var tile = document.getElementById("tile-" + socket.id);
-      if (tile) { tile._video.srcObject = stream; tile.classList.add("sharing"); }
-
-      shareBtn.classList.add("sharing-on");
-      shareBtn.querySelector(".ctrl-lbl").textContent = "Stop";
-      socket.emit("mobile-cam-share", { roomId: ROOM, isSharing: true });
-      toast("📷 Camera sharing started (rear cam)", "success");
-
-      vTrack.addEventListener("ended", stopAllSharing);
-    })
-    .catch(function (err) {
-      toast("Camera share failed: " + err.message, "error");
-    });
-  });
-
-  function stopAllSharing() {
-    if (!shareStream) return;
-
-    // Restore original video track in peers
-    var origVideo = localStream && localStream.getVideoTracks()[0];
-    Object.values(peers).forEach(function (pc) {
-      var sender = pc.getSenders().find(function (s) { return s.track && s.track.kind === "video"; });
-      if (sender && origVideo) sender.replaceTrack(origVideo).catch(console.error);
-    });
-
-    // Restore local tile
-    var tile = document.getElementById("tile-" + socket.id);
-    if (tile) {
-      if (localStream) tile._video.srcObject = localStream;
-      tile.classList.remove("sharing");
-    }
-
-    shareStream.getTracks().forEach(function (t) { t.stop(); });
-    shareStream = null;
-
-    if (isDesktopShare) socket.emit("screen-share-state", { roomId: ROOM, isSharing: false });
-    if (isMobileShare)  socket.emit("mobile-cam-share",   { roomId: ROOM, isSharing: false });
-
-    isDesktopShare = false;
-    isMobileShare  = false;
-
-    shareBtn.classList.remove("sharing-on");
-    shareBtn.querySelector(".ctrl-lbl").textContent = "Share";
-    toast("Sharing stopped");
+    }, 30000);
   }
+});
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  LEAVE
-  // ══════════════════════════════════════════════════════════════════════════
-  leaveBtn.addEventListener("click", function () { leaveModal.style.display = "flex"; });
-  cancelLeave.addEventListener("click", function () { leaveModal.style.display = "none"; });
-  confirmLeave.addEventListener("click", cleanup);
+// Chat
+function openChat() {
+  chatPanel.classList.add("open");
+  chatOpen = true;
+  unreadCount = 0;
+  unread.classList.add("hidden");
+  btnChat.classList.add("active");
+  setTimeout(() => chatInput.focus(), 300);
+}
+function closeChat() {
+  chatPanel.classList.remove("open");
+  chatOpen = false;
+  btnChat.classList.remove("active");
+}
+btnChat.addEventListener("click",      () => chatOpen ? closeChat() : openChat());
+btnCloseChat.addEventListener("click", closeChat);
 
-  function cleanup() {
-    Object.keys(peers).forEach(function (id) { peers[id].close(); });
-    Object.keys(analysers).forEach(teardownAnalyser);
-    if (localStream)  localStream.getTracks().forEach(function (t) { t.stop(); });
-    if (shareStream)  shareStream.getTracks().forEach(function (t) { t.stop(); });
-    socket.disconnect();
-    location.href = "/";
-  }
+// Leave
+btnLeave.addEventListener("click", () => leaveModal.classList.remove("hidden"));
+btnStay.addEventListener("click",  () => leaveModal.classList.add("hidden"));
+btnGo.addEventListener("click",    () => { leaveModal.classList.add("hidden"); doLeave(); });
 
-  window.addEventListener("beforeunload", function () { socket.disconnect(); });
+function doLeave() {
+  Object.values(peers).forEach(pc => { try { pc.close(); } catch (_) {} });
+  localStream?.getTracks().forEach(t => t.stop());
+  screenStream?.getTracks().forEach(t => t.stop());
+  socket.disconnect();
+  location.href = "/";
+}
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  START
-  // ══════════════════════════════════════════════════════════════════════════
-  startMedia(0);
-  appendChat(null, "You joined as " + ME);
+window.addEventListener("beforeunload", () => {
+  try { socket.disconnect(); } catch (_) {}
+});
 
-})();
+// ─────────────────────────────────────────────────────────
+// TOASTS
+// ─────────────────────────────────────────────────────────
+function toast(msg, type = "", dur = 3500) {
+  const el = document.createElement("div");
+  el.className = "toast" + (type ? " " + type : "");
+  const ico = type === "err" ? "❌" : type === "ok" ? "✅" : "ℹ️";
+  el.innerHTML = `<span>${ico}</span><span>${msg}</span>`;
+  toastsEl.appendChild(el);
+  setTimeout(() => {
+    el.style.animation = "tOut .3s var(--ez) forwards";
+    el.addEventListener("animationend", () => el.remove(), { once: true });
+  }, dur);
+}
+
+// ─────────────────────────────────────────────────────────
+// START
+// ─────────────────────────────────────────────────────────
+init();
